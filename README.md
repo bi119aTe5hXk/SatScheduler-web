@@ -23,7 +23,7 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Cursor-paginated upcoming Observation and Reception views.
 - Persistent one-hour caches for satellite, transmitter, TLE, station and upcoming timelines.
 - Uncached Reception loading whenever the page is opened or refreshed.
-- JSON import/export in shared Web, native iOS-array and Android-envelope formats.
+- File and pasted-JSON import/export using the iOS-compatible SatScheduler watch-list format.
 
 ## Run with Docker Compose
 
@@ -112,8 +112,14 @@ cd frontend && pnpm run build
 
 ## Import/export compatibility
 
-The settings page offers three exports. Shared Web JSON contains `watch_targets`, iOS
-`watchTargets`, Android `androidWatchTargets`, and the Android-compatible `targets` alias. The iOS
-export is the bare array consumed by the iOS model; the Android export is its native
-`schemaVersion`/`exportedAt`/`targets` envelope. Import accepts all of those forms and both acronym
-styles (`satelliteID`) and lower camel case (`satelliteId`).
+The settings page exports one watch-list format, matching the iOS app's
+`schemaVersion`/`exportedAt`/`targets` envelope. Target records use iOS acronym keys such as
+`satelliteID`, `transmitterID` and `stationIDs`, and include station names and snapshots. The same
+file is accepted by the Android app. Files can be selected directly or JSON can be pasted.
+During import, only targets whose `stationIDs` contain the configured station ID are accepted.
+Targets for other stations are skipped; a file containing no matching targets does not erase the
+existing watch list.
+
+Import still accepts exports from early SatScheduler Web builds, including bare arrays,
+`watch_targets`, `watchTargets`, `androidWatchTargets`, and Android lower-camel keys such as
+`satelliteId`.

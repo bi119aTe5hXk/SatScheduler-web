@@ -101,30 +101,88 @@ def test_wrapped_azimuth_and_station_daylight_filter():
     assert pass_allowed(item, target, station)[0]
 
 
-def test_mobile_import_and_shared_export(database: Database):
+def test_ios_watch_list_import_and_export(database: Database):
     repository = TargetRepository(database)
+    database.set_setting("station_config", {"station_id": 4856, "timezone": "Asia/Tokyo"})
     result = import_configuration(
         database,
         repository,
-        [
-            {
-                "name": "ISS",
-                "satelliteID": "XSKZ-5603-1870-9019-3066",
-                "satelliteName": "ISS",
-                "transmitterID": "abc",
-                "requireStationDaylight": True,
-                "minPeakElevation": 20,
-                "minAzimuth": 300,
-                "maxAzimuth": 60,
-            }
-        ],
+        {
+            "exportedAt": "2026-07-13T14:47:51Z",
+            "schemaVersion": 1,
+            "targets": [
+                {
+                    "enabled": True,
+                    "id": "2371A649-C2D6-4F87-B52D-3DE612947666",
+                    "name": "ISS",
+                    "satelliteID": "XSKZ-5603-1870-9019-3066",
+                    "satelliteName": "ISS",
+                    "stationIDs": [4856],
+                    "stationNames": {"4856": "biGS"},
+                    "stationSnapshots": {
+                        "4856": {
+                            "altitude": 100,
+                            "id": 4856,
+                            "latitude": 35.57,
+                            "longitude": 139.433,
+                            "minHorizon": 5,
+                            "name": "biGS",
+                        }
+                    },
+                    "transmitterID": "abc",
+                    "requireStationDaylight": True,
+                    "minPeakElevation": 20,
+                    "minAzimuth": 300,
+                    "maxAzimuth": 60,
+                }
+            ],
+        },
         replace=True,
     )
     assert result["imported"] == 1
-    exported = export_configuration(database, repository)
-    assert exported["watchTargets"][0]["satelliteID"] == "XSKZ-5603-1870-9019-3066"
-    assert exported["androidWatchTargets"][0]["satelliteId"] == "XSKZ-5603-1870-9019-3066"
-    assert exported["watch_targets"][0]["requires_station_daylight"] is True
+    assert result["skipped_station_mismatch"] == 0
+    assert repository.list()[0].min_elevation == 5
+    imported_station = database.get_setting("station_config", {})
+    assert imported_station["station_id"] == 4856
+    assert imported_station["station_name"] == "biGS"
+
+    station = StationConfig(
+        station_id=4856,
+        latitude=35.57,
+        longitude=139.433,
+        altitude_m=100,
+        timezone="Asia/Tokyo",
+        station_name="biGS",
+    )
+    exported = export_configuration(repository, station)
+    assert set(exported) == {"exportedAt", "schemaVersion", "targets"}
+    assert exported["schemaVersion"] == 1
+    assert exported["exportedAt"].endswith("Z")
+    exported_target = exported["targets"][0]
+    assert exported_target["satelliteID"] == "XSKZ-5603-1870-9019-3066"
+    assert exported_target["stationNames"] == {"4856": "biGS"}
+    assert exported_target["stationSnapshots"]["4856"]["minHorizon"] == 5
+    assert exported_target["requireStationDaylight"] is True
+    assert "satelliteId" not in exported_target
+    assert "priority" not in exported_target
+
+    mismatch = import_configuration(
+        database,
+        repository,
+        {
+            "schemaVersion": 1,
+            "targets": [
+                {
+                    "name": "Other station satellite",
+                    "satelliteID": "OTHER-SAT",
+                    "stationIDs": [9999],
+                }
+            ],
+        },
+        replace=True,
+    )
+    assert mismatch == {"imported": 0, "skipped_station_mismatch": 1}
+    assert [target.name for target in repository.list()] == ["ISS"]
 
 
 def test_satellite_limit_is_applied_after_sorting():

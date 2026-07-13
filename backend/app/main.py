@@ -14,7 +14,7 @@ from app.cache import PersistentCache
 from app.config import ENV
 from app.db import configure_database
 from app.executor import ScheduleExecutor
-from app.import_export import export_configuration, export_mobile_targets, import_configuration
+from app.import_export import export_configuration, import_configuration
 from app.jobs import AutomaticScheduler
 from app.planner import Planner
 from app.satnogs import SatNOGSClient
@@ -213,10 +213,12 @@ async def cache_clear(prefix: str | None = None):
 
 
 @app.get("/api/export")
-async def export_config(format: str = Query(default="shared", pattern="^(shared|ios|android)$")):
-    if format == "shared":
-        return export_configuration(database, targets)
-    return export_mobile_targets(targets, format)
+async def export_config():
+    try:
+        station = await resolve_station(database, client)
+    except (TypeError, ValueError):
+        station = None
+    return export_configuration(targets, station)
 
 
 @app.post("/api/import")
