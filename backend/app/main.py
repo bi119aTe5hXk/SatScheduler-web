@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -235,7 +235,7 @@ async def export_config():
 
 
 @app.post("/api/import")
-async def import_config(payload: Any, replace: bool = True):
+async def import_config(payload: Any = Body(...), replace: bool = True):
     try:
         result = import_configuration(database, targets, payload, replace)
         automatic_scheduler.reschedule()
