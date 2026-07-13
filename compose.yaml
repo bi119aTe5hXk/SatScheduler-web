@@ -1,0 +1,28 @@
+services:
+  satscheduler:
+    build:
+      context: .
+    image: satscheduler-web:local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SATNOGS_API_TOKEN: ${SATNOGS_API_TOKEN:-}
+      SATNOGS_STATION_ID: ${SATNOGS_STATION_ID:-}
+      STATION_LATITUDE: ${STATION_LATITUDE:-}
+      STATION_LONGITUDE: ${STATION_LONGITUDE:-}
+      STATION_ALTITUDE_M: ${STATION_ALTITUDE_M:-}
+      STATION_TIMEZONE: ${STATION_TIMEZONE:-UTC}
+      DATABASE_PATH: /data/satscheduler.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - satscheduler_data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  satscheduler_data:
