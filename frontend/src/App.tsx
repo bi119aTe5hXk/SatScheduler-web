@@ -73,7 +73,8 @@ function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string
 function Dashboard({ config, targets, onNavigate }: { config: any; targets: Target[]; onNavigate: (p: Page) => void }) {
   const now = useClock()
   const [upcoming, setUpcoming] = useState<Observation[]>([])
-  useEffect(() => { api<any>('/observations/upcoming').then(value => setUpcoming(value.results || [])).catch(() => {}) }, [])
+  useEffect(() => { api<any>('/observations/overview').then(value => setUpcoming(value.results || [])).catch(() => {}) }, [])
+  const next = useMemo(() => [...upcoming].filter(item => new Date(item.end || item.start || 0).getTime() > now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [upcoming, now])
   return <div className="page">
     <PageHeader eyebrow="GROUND CONTROL / SINGLE STATION" title="Observation overview" action={<button className="primary" onClick={() => onNavigate('schedule')}>Build schedule</button>} />
     <section className="hero-grid">
@@ -85,11 +86,51 @@ function Dashboard({ config, targets, onNavigate }: { config: any; targets: Targ
     <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Station timeline</h2></div><button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div>
       <Timeline observations={upcoming} />
     </section>
+    <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
+      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><dl className="observation-facts"><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd>#{next.id}</dd></dl></div><PolarPlot observation={next} /></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
+    </section>
     <section className="split">
       <div className="panel"><div className="panel-title"><h2>Watch list health</h2></div>{targets.slice(0, 6).map(target => <div className="row" key={target.id}><span className={`health ${target.health_status}`} /> <strong>{target.satellite_name || target.name}</strong><span className="muted">{target.health_status}</span></div>)}</div>
       <div className="panel"><div className="panel-title"><h2>Prediction setup</h2></div><dl className="facts"><dt>Engine</dt><dd>{config?.scheduler?.prediction_engine?.replace('_', ' ')}</dd><dt>Sort mode</dt><dd>{config?.scheduler?.sort_mode?.replaceAll('_', ' ')}</dd><dt>Horizon</dt><dd>{config?.scheduler?.horizon_hours} hours</dd><dt>Station timezone</dt><dd>{config?.station?.timezone || 'UTC'}</dd></dl></div>
     </section>
   </div>
+}
+
+function observationSatellite(item: Observation): string {
+  return item.satellite_name || item.tle0?.replace(/^0\s+/, '') || (item.norad_cat_id ? `NORAD ${item.norad_cat_id}` : 'Unknown satellite')
+}
+
+function observationFrequency(item: Observation): number | undefined {
+  return item.observation_frequency || item.center_frequency || item.transmitter_downlink_low
+}
+
+function degrees(value?: number): string {
+  return value == null ? '—' : `${value.toFixed(1)}°`
+}
+
+function distanceFrom(now: Date, value?: string): string {
+  if (!value) return '—'
+  const seconds = Math.round((new Date(value).getTime() - now.getTime()) / 1000)
+  const absolute = Math.abs(seconds), days = Math.floor(absolute / 86400), hours = Math.floor((absolute % 86400) / 3600), minutes = Math.floor((absolute % 3600) / 60), rest = absolute % 60
+  const parts = days ? [`${days}d`, `${hours}h`] : hours ? [`${hours}h`, `${minutes}m`] : minutes ? [`${minutes}m`, `${rest}s`] : [`${rest}s`]
+  return `${seconds >= 0 ? 'in ' : ''}${parts.join(' ')}${seconds < 0 ? ' ago' : ''}`
+}
+
+function listeningStatus(item: Observation, now: Date): { label: string; className: string } {
+  const time = now.getTime(), start = new Date(item.start || 0).getTime(), end = new Date(item.end || 0).getTime()
+  if (time >= start && time < end) return { label: 'Receiving now', className: 'live' }
+  if (time < start) return { label: 'Scheduled', className: 'scheduled' }
+  return { label: item.status || 'Finished', className: item.status === 'good' ? 'good' : 'finished' }
+}
+
+function PolarPlot({ observation }: { observation: Observation }) {
+  const center = 130, radius = 104
+  const polar = (azimuth: number, elevation: number) => { const radians = (azimuth - 90) * Math.PI / 180, distance = radius * (1 - elevation / 90); return { x: center + distance * Math.cos(radians), y: center + distance * Math.sin(radians) } }
+  const riseAzimuth = observation.rise_azimuth ?? 0, setAzimuth = observation.set_azimuth ?? 180
+  const delta = ((setAzimuth - riseAzimuth + 540) % 360) - 180, peakAzimuth = (riseAzimuth + delta / 2 + 360) % 360
+  const rise = polar(riseAzimuth, 0), peak = polar(peakAzimuth, observation.max_altitude ?? 0), set = polar(setAzimuth, 0)
+  const control = { x: 2 * peak.x - (rise.x + set.x) / 2, y: 2 * peak.y - (rise.y + set.y) / 2 }
+  return <div className="polar-wrap"><svg className="polar-plot" viewBox="0 0 260 260" role="img" aria-label={`Polar plot from ${riseAzimuth} degrees to ${setAzimuth} degrees, peak ${observation.max_altitude ?? 0} degrees`}><circle cx={center} cy={center} r={radius} /><circle cx={center} cy={center} r={radius * 2 / 3} /><circle cx={center} cy={center} r={radius / 3} /><line x1={center} y1={center - radius} x2={center} y2={center + radius} /><line x1={center - radius} y1={center} x2={center + radius} y2={center} /><text x={center} y="13">N</text><text x="250" y={center + 4}>E</text><text x={center} y="257">S</text><text x="10" y={center + 4}>W</text><text className="elevation-label" x={center + 4} y={center - radius * 2 / 3}>30°</text><text className="elevation-label" x={center + 4} y={center - radius / 3}>60°</text><path className="polar-path" d={`M ${rise.x} ${rise.y} Q ${control.x} ${control.y} ${set.x} ${set.y}`} /><circle className="polar-point rise" cx={rise.x} cy={rise.y} r="4" /><circle className="polar-point peak" cx={peak.x} cy={peak.y} r="5" /><circle className="polar-point set" cx={set.x} cy={set.y} r="4" /></svg><div className="polar-legend"><span><i className="rise" />AOS {degrees(riseAzimuth)}</span><span><i className="peak" />MAX {degrees(observation.max_altitude)}</span><span><i className="set" />LOS {degrees(setAzimuth)}</span></div></div>
 }
 
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -158,10 +199,36 @@ function Schedule({ settings, targets, onError }: { settings: Settings; targets:
 }
 
 function ObservationList({ future, title }: { future: boolean; title: string }) {
-  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState('')
+  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState(''), [selected, setSelected] = useState<number | null>(null)
   const load = async (reset = false) => { setLoading(true); setError(''); try { const activeCursor = reset ? null : cursor; const query = activeCursor ? `?cursor=${encodeURIComponent(activeCursor)}` : ''; const data = await api<any>(`/observations/${future ? 'upcoming' : 'receptions'}${query}`); setItems(previous => reset ? data.results : [...previous, ...data.results.filter((v: Observation) => !previous.some(p => p.id === v.id))]); setCursor(data.next_cursor || null) } catch (e) { setError(String(e)) } finally { setLoading(false) } }
   useEffect(() => { setItems([]); setCursor(null); load(true) }, [future])
-  return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => load(true)} disabled={loading}>Refresh</button>} />{error && <div className="notice">{error}</div>}<div className="panel observation-list">{items.map(item => <article key={item.id}><div className="obs-id">#{item.id}</div><div><strong>{item.satellite_name || `NORAD ${item.norad_cat_id || '—'}`}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{item.max_altitude != null ? `${item.max_altitude.toFixed(1)}°` : '—'}</strong><small>{item.vetted_status || (future ? 'scheduled' : 'unknown')}</small></div>{!future && <div className="asset-links">{item.waterfall && <a href={item.waterfall} target="_blank">Waterfall</a>}{item.payload && <a href={item.payload} target="_blank">Audio</a>}{item.archive_url && <a href={item.archive_url} target="_blank">Archive</a>}</div>}</article>)}{!items.length && !loading && <div className="empty">No records returned.</div>}</div>{cursor && <button className="load-more" onClick={() => load()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}</div>
+  if (!future && selected != null) return <ObservationDetail observationId={selected} onBack={() => setSelected(null)} />
+  return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => load(true)} disabled={loading}>Refresh</button>} />{error && <div className="notice">{error}</div>}<div className="panel observation-list">{items.map(item => <button className="observation-row" key={item.id} onClick={() => !future && setSelected(item.id)} disabled={future}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><small>{item.vetted_status || (future ? 'scheduled' : 'unknown')}</small></div>{!future && <span className="detail-chevron">View detail →</span>}</button>)}{!items.length && !loading && <div className="empty">No records returned.</div>}</div>{cursor && <button className="load-more" onClick={() => load()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}</div>
+}
+
+function ObservationDetail({ observationId, onBack }: { observationId: number; onBack: () => void }) {
+  const [item, setItem] = useState<Observation | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState('')
+  useEffect(() => { setLoading(true); api<Observation>(`/observations/${observationId}`).then(setItem).catch(e => setError(String(e))).finally(() => setLoading(false)) }, [observationId])
+  if (loading) return <div className="page"><PageHeader eyebrow="RECEPTION DETAIL" title={`Observation #${observationId}`} action={<button className="ghost" onClick={onBack}>← Back</button>} /><div className="panel catalog-loading"><span className="spinner" /> Loading observation detail…</div></div>
+  if (!item || error) return <div className="page"><PageHeader eyebrow="RECEPTION DETAIL" title={`Observation #${observationId}`} action={<button className="ghost" onClick={onBack}>← Back</button>} /><div className="panel empty">{error || 'Observation not found.'}</div></div>
+  const metadata = observationMetadata(item), radio = metadata?.radio, parameters = radio?.parameters || {}, demoddata = item.demoddata || []
+  return <div className="page observation-detail"><PageHeader eyebrow={`RECEPTION DETAIL / #${item.id}`} title={observationSatellite(item)} action={<div className="button-row"><button className="ghost" onClick={onBack}>← Back</button><a className="ghost button-link" href={`https://network.satnogs.org/observations/${item.id}/`} target="_blank" rel="noreferrer">Open SatNOGS ↗</a></div>} />
+    <section className="observation-detail-hero"><div><span className={`observation-status ${item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'finished'}`}>{item.vetted_status || item.status || 'unknown'}</span><strong>{formatUtc(item.start)}</strong><small>{formatUtc(item.end)} · {observationDuration(item)}</small></div><div><small>TRANSMITTER</small><strong>{item.transmitter_description || item.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(item))} · {item.transmitter_mode || 'Unknown mode'}{item.transmitter_baud ? ` · ${item.transmitter_baud.toLocaleString()} baud` : ''}</span></div><div><small>GROUND STATION</small><strong>{item.station_name || `Station ${item.ground_station || '—'}`}</strong><span>{item.station_lat ?? '—'}, {item.station_lng ?? '—'} · {item.station_alt ?? '—'} m</span></div></section>
+    <section className="reception-media-grid"><div className="panel waterfall-panel"><div className="panel-title"><div><small>SPECTRUM</small><h2>Waterfall</h2></div>{item.waterfall && <a href={item.waterfall} target="_blank" rel="noreferrer">Open original ↗</a>}</div>{item.waterfall ? <img src={item.waterfall} alt={`Waterfall for observation ${item.id}`} loading="lazy" /> : <div className="empty">No waterfall was uploaded.</div>}</div><div className="panel reception-side"><div><small>AUDIO RECORDING</small><h2>Listen</h2>{item.payload ? <audio controls preload="metadata" src={item.payload} /> : <p className="muted">No audio was uploaded.</p>}</div><PolarPlot observation={item} /></div></section>
+    <section className="split reception-details"><div className="panel"><div className="panel-title"><div><small>PASS GEOMETRY</small><h2>Observation data</h2></div></div><dl className="detail-facts"><dt>Maximum elevation</dt><dd>{degrees(item.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(item.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(item.set_azimuth)}</dd><dt>NORAD catalog ID</dt><dd>{item.norad_cat_id || '—'}</dd><dt>SatNOGS satellite ID</dt><dd>{item.sat_id || '—'}</dd><dt>Observer</dt><dd>{item.observer || '—'}</dd><dt>Client version</dt><dd>{item.client_version || '—'}</dd><dt>Radio</dt><dd>{radio?.name || '—'}{radio?.version ? ` ${radio.version}` : ''}</dd><dt>Receiver gain</dt><dd>{parameters.gain ? `${parameters.gain} dB` : '—'}</dd><dt>Sample rate</dt><dd>{parameters['samp-rate-rx'] || '—'}</dd></dl></div><div className="panel"><div className="panel-title"><div><small>ORBITAL ELEMENTS</small><h2>TLE used for observation</h2></div><span className="muted">{item.tle_source || 'Unknown source'}</span></div><pre className="tle-block">{[item.tle0, item.tle1, item.tle2].filter(Boolean).join('\n') || 'No TLE available.'}</pre><div className="detail-assets"><a className={`ghost button-link ${item.payload ? '' : 'disabled'}`} href={item.payload || undefined} target="_blank" rel="noreferrer">Audio file</a><a className={`ghost button-link ${item.archive_url ? '' : 'disabled'}`} href={item.archive_url || undefined} target="_blank" rel="noreferrer">Archive</a></div>{demoddata.length > 0 && <div className="demod-list"><small>DECODED DATA</small>{demoddata.map((entry, index) => { const url = typeof entry === 'string' ? entry : entry.url; return url ? <a key={url} href={url} target="_blank" rel="noreferrer">{typeof entry === 'string' ? `Frame ${index + 1}` : entry.name || `Frame ${index + 1}`}</a> : null })}</div>}</div></section>
+  </div>
+}
+
+function observationMetadata(item: Observation): any {
+  if (!item.client_metadata) return null
+  if (typeof item.client_metadata === 'object') return item.client_metadata
+  try { return JSON.parse(item.client_metadata) } catch { return null }
+}
+
+function observationDuration(item: Observation): string {
+  if (!item.start || !item.end) return '—'
+  const seconds = Math.max(0, Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 1000))
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 function SettingsPage({ value, config, onSaved, onError }: { value: Settings; config: any; onSaved: () => void; onError: (v: string) => void }) {

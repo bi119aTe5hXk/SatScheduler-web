@@ -87,15 +87,36 @@ export type Observation = {
   start?: string
   end?: string
   satellite_name?: string
+  tle0?: string
+  tle1?: string
+  tle2?: string
+  tle_source?: string
   sat_id?: string
   norad_cat_id?: number
+  ground_station?: number
   transmitter_uuid?: string
   transmitter_description?: string
   transmitter_mode?: string
+  transmitter_baud?: number
+  transmitter_downlink_low?: number
+  transmitter_downlink_high?: number
+  observation_frequency?: number
+  center_frequency?: number
   station_name?: string
+  station_lat?: number
+  station_lng?: number
+  station_alt?: number
   max_altitude?: number
+  rise_azimuth?: number
+  set_azimuth?: number
+  status?: string
   vetted_status?: string
   waterfall?: string
   payload?: string
+  demoddata?: Array<string | { url?: string; name?: string }>
   archive_url?: string
+  archived?: boolean
+  observer?: string
+  client_version?: string
+  client_metadata?: string | Record<string, any>
 }

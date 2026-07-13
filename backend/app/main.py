@@ -199,12 +199,25 @@ async def observations_upcoming(cursor: str | None = Query(default=None), force:
     )
 
 
+@app.get("/api/observations/overview")
+async def observations_overview(force: bool = False):
+    station = await resolve_station(database, client)
+    results = await client.all_future_observations(station.station_id, force=force)
+    results.sort(key=lambda item: item.get("start", ""))
+    return {"results": results}
+
+
 @app.get("/api/observations/receptions")
 async def observations_receptions(cursor: str | None = Query(default=None)):
     station = await resolve_station(database, client)
     return await client.observation_page(
         station.station_id, future=False, cursor=cursor, use_cache=False
     )
+
+
+@app.get("/api/observations/{observation_id}")
+async def observation_detail(observation_id: int):
+    return await client.observation(observation_id)
 
 
 @app.delete("/api/cache")

@@ -16,7 +16,7 @@ from app.schemas import (
     StationConfig,
     WatchTarget,
 )
-from app.satnogs import merge_transmitter_insights
+from app.satnogs import SatNOGSClient, merge_transmitter_insights
 from app.targets import TargetRepository
 
 
@@ -75,6 +75,33 @@ async def test_persistent_cache_coalesces_fresh_value(database: Database):
     second, _ = await cache.get_or_fetch("key", "test", timedelta(hours=1), fetch)
     assert first == second == {"value": 1}
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_observation_pages_use_supported_time_filters(database: Database, monkeypatch):
+    client = SatNOGSClient(PersistentCache(database), "")
+    requests: list[dict] = []
+
+    class Response:
+        headers: dict = {}
+
+        @staticmethod
+        def json():
+            return []
+
+    async def fake_get(url, params=None):
+        requests.append(params or {})
+        return Response()
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    await client.observation_page(4856, future=True, use_cache=False)
+    await client.observation_page(4856, future=False, use_cache=False)
+    await client.close()
+
+    assert requests[0] == {"ground_station": 4856, "status": "future"}
+    assert requests[1]["ground_station"] == 4856
+    assert "end" in requests[1]
+    assert "future" not in requests[1]
 
 
 def test_sort_modes_are_distinct():

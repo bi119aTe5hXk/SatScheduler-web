@@ -222,10 +222,11 @@ class SatNOGSClient:
         use_cache: bool = True,
         force: bool = False,
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "ground_station": station_id,
-            "future": "1" if future else "0",
-        }
+        params: dict[str, Any] = {"ground_station": station_id}
+        if future:
+            params["status"] = "future"
+        else:
+            params["end"] = datetime.now(timezone.utc).isoformat()
         if cursor:
             params["cursor"] = cursor
         key = f"observations:{station_id}:{int(future)}:{cursor or 'first'}"
@@ -249,6 +250,13 @@ class SatNOGSClient:
             key, "observations", ONE_HOUR, fetch, force=force
         )
         payload["cache"] = metadata
+        return payload
+
+    async def observation(self, observation_id: int) -> dict[str, Any]:
+        response = await self._get(f"{NETWORK_BASE_URL}/observations/{observation_id}/")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise SatNOGSError("SatNOGS returned an invalid observation detail")
         return payload
 
     async def all_future_observations(

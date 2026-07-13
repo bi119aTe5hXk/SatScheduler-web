@@ -20,7 +20,11 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
   SatNOGS default priority scoring.
 - Manual plan preview with single-pass or batch submission and per-observation fallback after batch failure.
 - Daily station-local-time or fixed-hour automatic execution, limited to a 48-hour horizon.
+- Overview card for the next observation with live listening state/countdowns, transmitter details,
+  pass geometry and a polar plot.
 - Cursor-paginated upcoming Observation and Reception views.
+- Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
+  polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
 - Persistent one-hour caches for satellite, transmitter, TLE, station and upcoming timelines.
 - Uncached Reception loading whenever the page is opened or refreshed.
 - File and pasted-JSON import/export using the iOS-compatible SatScheduler watch-list format.
@@ -67,8 +71,8 @@ docker buildx build --platform linux/amd64,linux/arm/v7 -t IMAGE --push .
 
 Satellite catalogs, per-satellite transmitters, batched TLEs, station details and upcoming
 Observation pages use a persistent one-hour TTL in SQLite. A manual refresh bypasses the TTL.
-Reception pages and their artifact URLs never use this cache. Successful scheduling invalidates
-upcoming Observation pages immediately.
+Reception pages, observation details and their artifact URLs never use this cache. Successful
+scheduling invalidates upcoming Observation pages immediately.
 
 Per-transmitter Network statistics are fetched only while adding/editing a watch target and kept
 for 24 hours. The recent-good recommendation is cached for one hour. The selected transmitter's
