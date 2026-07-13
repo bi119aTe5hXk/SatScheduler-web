@@ -6,6 +6,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 ## Current features
 
 - Ordered watch list with drag-equivalent up/down priority controls.
+- Searchable satellite picker matching name, aliases, SatNOGS ID and NORAD ID, with a visible
+  catalog loading state and a 100-row render limit.
 - Satellite and transmitter selection from SatNOGS DB.
 - Transmitter selection enriched with cached SatNOGS Network good/unknown/bad statistics,
   a three-color ratio bar and an iOS-compatible recommendation from the latest two good-observation
@@ -73,6 +75,14 @@ for 24 hours. The recent-good recommendation is cached for one hour. The selecte
 success rate, good count and same-satellite maximum good count are saved with the target, so manual
 and automatic batch planning performs no statistics request. SatNOGS default mode skips targets
 whose saved statistics are unavailable; the other sort modes remain usable.
+
+## Priority semantics
+
+Watch-list priority is the visible up/down order. `List priority` follows that target order;
+`List priority + best elevation` follows target order and prefers the highest pass for each target;
+`Best elevation` ignores list order for the primary ranking; `SatNOGS default` uses the saved
+transmitter statistics formula. The old numeric `priority` field remains accepted in JSON/API
+payloads for compatibility, but it is no longer shown because none of these four modes uses it.
 
 ## Development
 
