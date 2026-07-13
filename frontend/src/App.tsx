@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, formatUtc, frequency } from './api'
 import type { Observation, Pass, Settings, Target, TransmitterInsight } from './types'
 
@@ -32,7 +32,13 @@ export default function App() {
   const [config, setConfig] = useState<any>(null)
   const [targets, setTargets] = useState<Target[]>([])
   const [settings, setSettings] = useState<Settings>(defaultSettings)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' | 'info' } | null>(null)
+  const notify = (message: string, tone: 'success' | 'error' | 'info' = 'error') => setNotice({ message, tone })
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), notice.tone === 'info' ? 3500 : 6000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   const reload = async () => {
     try {
@@ -40,7 +46,7 @@ export default function App() {
         api<any>('/config'), api<Target[]>('/targets'), api<Settings>('/settings'),
       ])
       setConfig(configValue); setTargets(targetValues); setSettings(settingsValue)
-    } catch (error) { setNotice(String(error)) }
+    } catch (error) { notify(String(error)) }
   }
   useEffect(() => { reload() }, [])
 
@@ -55,13 +61,13 @@ export default function App() {
       </div>
     </aside>
     <main>
-      {notice && <div className="notice" onClick={() => setNotice('')}>{notice}</div>}
+      {notice && <button className={`notice ${notice.tone}`} onClick={() => setNotice(null)}>{notice.message}</button>}
       {page === 'dashboard' && <Dashboard config={config} targets={targets} onNavigate={setPage} />}
-      {page === 'targets' && <Targets targets={targets} onChanged={reload} onError={setNotice} />}
-      {page === 'schedule' && <Schedule settings={settings} targets={targets} onError={setNotice} />}
-      {page === 'observations' && <ObservationList future title="Upcoming observations" />}
-      {page === 'receptions' && <ObservationList future={false} title="Reception archive" />}
-      {page === 'settings' && <SettingsPage value={settings} config={config} onSaved={reload} onError={setNotice} />}
+      {page === 'targets' && <Targets targets={targets} onChanged={reload} onError={message => notify(message)} />}
+      {page === 'schedule' && <Schedule settings={settings} targets={targets} onError={message => notify(message)} />}
+      {page === 'observations' && <ObservationList future title="Upcoming observations" onNotify={notify} />}
+      {page === 'receptions' && <ObservationList future={false} title="Reception archive" onNotify={notify} />}
+      {page === 'settings' && <SettingsPage value={settings} config={config} onSaved={reload} onError={message => notify(message)} />}
     </main>
   </div>
 }
@@ -198,12 +204,61 @@ function Schedule({ settings, targets, onError }: { settings: Settings; targets:
   </div>
 }
 
-function ObservationList({ future, title }: { future: boolean; title: string }) {
-  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState(''), [selected, setSelected] = useState<number | null>(null)
-  const load = async (reset = false) => { setLoading(true); setError(''); try { const activeCursor = reset ? null : cursor; const query = activeCursor ? `?cursor=${encodeURIComponent(activeCursor)}` : ''; const data = await api<any>(`/observations/${future ? 'upcoming' : 'receptions'}${query}`); setItems(previous => reset ? data.results : [...previous, ...data.results.filter((v: Observation) => !previous.some(p => p.id === v.id))]); setCursor(data.next_cursor || null) } catch (e) { setError(String(e)) } finally { setLoading(false) } }
-  useEffect(() => { setItems([]); setCursor(null); load(true) }, [future])
+function ObservationList({ future, title, onNotify }: { future: boolean; title: string; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
+  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(null)
+  const [progress, setProgress] = useState({ page: 0, records: 0 })
+  const request = useRef<AbortController | null>(null)
+  const loadUpcoming = async (force = false) => {
+    request.current?.abort()
+    const controller = new AbortController()
+    request.current = controller
+    setLoading(true); setItems([]); setCursor(null); setProgress({ page: 0, records: 0 })
+    const collected: Observation[] = [], seenIds = new Set<number>(), seenCursors = new Set<string>()
+    let nextCursor: string | null = null, pages = 0
+    try {
+      while (pages < 20) {
+        const params = new URLSearchParams()
+        if (nextCursor) params.set('cursor', nextCursor)
+        if (force) params.set('force', 'true')
+        const data = await api<any>(`/observations/upcoming${params.size ? `?${params}` : ''}`, { signal: controller.signal })
+        pages += 1
+        for (const item of data.results || []) if (!seenIds.has(item.id)) { seenIds.add(item.id); collected.push(item) }
+        collected.sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+        setItems([...collected]); setProgress({ page: pages, records: collected.length })
+        nextCursor = data.next_cursor || null
+        if (!nextCursor || seenCursors.has(nextCursor)) break
+        seenCursors.add(nextCursor)
+      }
+      onNotify(`Upcoming observations updated: ${collected.length} records from ${pages} page${pages === 1 ? '' : 's'}.`, 'success')
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') onNotify(`Upcoming observations update failed after page ${pages}: ${String(error)}`, 'error')
+    } finally {
+      if (request.current === controller) { request.current = null; setLoading(false) }
+    }
+  }
+  const loadReceptionPage = async (reset = false) => {
+    setLoading(true)
+    try {
+      const activeCursor = reset ? null : cursor, query = activeCursor ? `?cursor=${encodeURIComponent(activeCursor)}` : ''
+      const data = await api<any>(`/observations/receptions${query}`)
+      setItems(previous => reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))])
+      setCursor(data.next_cursor || null)
+      if (reset) onNotify(`Reception archive updated: ${data.results.length} records loaded.`, 'success')
+    } catch (error) { onNotify(`Reception archive update failed: ${String(error)}`, 'error') }
+    finally { setLoading(false) }
+  }
+  useEffect(() => {
+    setItems([]); setCursor(null); setSelected(null)
+    if (future) void loadUpcoming(false); else void loadReceptionPage(true)
+    return () => request.current?.abort()
+  }, [future])
   if (!future && selected != null) return <ObservationDetail observationId={selected} onBack={() => setSelected(null)} />
-  return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => load(true)} disabled={loading}>Refresh</button>} />{error && <div className="notice">{error}</div>}<div className="panel observation-list">{items.map(item => <button className="observation-row" key={item.id} onClick={() => !future && setSelected(item.id)} disabled={future}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><small>{item.vetted_status || (future ? 'scheduled' : 'unknown')}</small></div>{!future && <span className="detail-chevron">View detail →</span>}</button>)}{!items.length && !loading && <div className="empty">No records returned.</div>}</div>{cursor && <button className="load-more" onClick={() => load()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}</div>
+  return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => future ? loadUpcoming(true) : loadReceptionPage(true)}>{loading ? (future ? 'Restart refresh' : 'Refreshing…') : 'Refresh'}</button>} />
+    {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{items.length} observations</span></div><Timeline observations={items} /></section>}
+    {future && loading && <div className="fetch-progress"><span className="spinner" /><div><strong>{progress.page ? `Fetching page ${progress.page + 1}…` : 'Starting background update…'}</strong><small>{progress.page} page{progress.page === 1 ? '' : 's'} · {progress.records} observations loaded</small></div></div>}
+    <div className="panel observation-list">{items.map(item => <button className="observation-row" key={item.id} onClick={() => !future && setSelected(item.id)} disabled={future}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><small>{item.vetted_status || (future ? 'scheduled' : 'unknown')}</small></div>{!future && <span className="detail-chevron">View detail →</span>}</button>)}{!items.length && !loading && <div className="empty">No records returned.</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
+    {!future && cursor && <button className="load-more" onClick={() => loadReceptionPage()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}
+  </div>
 }
 
 function ObservationDetail({ observationId, onBack }: { observationId: number; onBack: () => void }) {

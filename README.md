@@ -22,7 +22,9 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Daily station-local-time or fixed-hour automatic execution, limited to a 48-hour horizon.
 - Overview card for the next observation with live listening state/countdowns, transmitter details,
   pass geometry and a polar plot.
-- Cursor-paginated upcoming Observation and Reception views.
+- Background-paginated Upcoming view with live page/record progress, a matching 48-hour timeline,
+  force refresh and completion/failure notifications.
+- Cursor-paginated Reception archive.
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
 - Persistent one-hour caches for satellite, transmitter, TLE, station and upcoming timelines.
