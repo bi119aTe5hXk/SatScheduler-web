@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -76,6 +77,31 @@ async def test_persistent_cache_coalesces_fresh_value(database: Database):
     second, _ = await cache.get_or_fetch("key", "test", timedelta(hours=1), fetch)
     assert first == second == {"value": 1}
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_satnogs_requests_share_configurable_interval(database: Database, monkeypatch):
+    client = SatNOGSClient(PersistentCache(database), "", request_interval_seconds=0.04)
+    started: list[float] = []
+
+    class Response:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    async def fake_request(method, url, **kwargs):
+        started.append(asyncio.get_running_loop().time())
+        return Response()
+
+    monkeypatch.setattr(client.http, "request", fake_request)
+    await asyncio.gather(
+        client._request("GET", "https://example.test/one"),
+        client._request("POST", "https://example.test/two"),
+    )
+    await client.close()
+
+    assert len(started) == 2
+    assert started[1] - started[0] >= 0.035
 
 
 @pytest.mark.asyncio

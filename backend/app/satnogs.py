@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -56,18 +57,51 @@ def merge_transmitter_insights(
 
 
 class SatNOGSClient:
-    def __init__(self, cache: PersistentCache, api_token: str):
+    def __init__(
+        self,
+        cache: PersistentCache,
+        api_token: str,
+        request_interval_seconds: float | Callable[[], float] = 0.0,
+    ):
         self.cache = cache
         self.api_token = api_token
+        self.request_interval_seconds = request_interval_seconds
+        self._request_lock = asyncio.Lock()
+        self._last_request_started: float | None = None
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(30), follow_redirects=True)
 
     async def close(self) -> None:
         await self.http.aclose()
 
-    async def _get(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
-        response = await self.http.get(url, params=params)
+    def _configured_request_interval(self) -> float:
+        value = (
+            self.request_interval_seconds()
+            if callable(self.request_interval_seconds)
+            else self.request_interval_seconds
+        )
+        return max(0.0, min(30.0, float(value)))
+
+    async def _wait_for_request_slot(self) -> None:
+        async with self._request_lock:
+            loop = asyncio.get_running_loop()
+            if self._last_request_started is not None:
+                remaining = (
+                    self._last_request_started
+                    + self._configured_request_interval()
+                    - loop.time()
+                )
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            self._last_request_started = loop.time()
+
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        await self._wait_for_request_slot()
+        response = await self.http.request(method, url, **kwargs)
         response.raise_for_status()
         return response
+
+    async def _get(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
+        return await self._request("GET", url, params=params)
 
     async def satellites(self, force: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         async def fetch() -> Any:
@@ -287,13 +321,13 @@ class SatNOGSClient:
         if not self.api_token:
             raise SatNOGSError("SATNOGS_API_TOKEN is not configured")
         try:
-            response = await self.http.post(
+            response = await self._request(
+                "POST",
                 f"{NETWORK_BASE_URL}/observations/",
                 json=requests,
                 headers={"Authorization": f"Token {self.api_token}"},
                 timeout=45,
             )
-            response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise SatNOGSError(exc.response.text or str(exc)) from exc
         payload = response.json()

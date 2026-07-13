@@ -28,6 +28,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
 - Persistent one-hour caches for satellite, transmitter, TLE, station, Upcoming and Reception lists.
+- A shared configurable SatNOGS API request interval (4 seconds by default) covering DB/Network
+  reads, pagination and observation submissions.
 - File and pasted-JSON import/export using the iOS-compatible SatScheduler watch-list format.
 
 ## Run with Docker Compose
@@ -75,6 +77,12 @@ Reception pages use a persistent one-hour TTL in SQLite. The web UI also keeps s
 Observation lists for one hour so reopening a page does not make another backend request. A manual
 refresh bypasses both cache layers. Observation details and their artifact URLs remain uncached.
 Successful scheduling invalidates upcoming Observation pages immediately.
+
+All outbound SatNOGS DB and Network requests share one global start-rate limiter. The interval is
+configured in Settings under `API request interval seconds` (0.5–30 seconds, default 4); changing
+it takes effect for the next request without restarting the container. A 3–5 second interval is
+recommended to reduce HTTP 429 responses. Cache hits do not enter the limiter because they do not
+make an external request.
 
 Per-transmitter Network statistics are fetched only while adding/editing a watch target and kept
 for 24 hours. The recent-good recommendation is cached for one hour. The selected transmitter's

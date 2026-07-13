@@ -86,6 +86,7 @@ class SchedulerSettings(BaseModel):
     satellites_per_run: int = Field(default=30, ge=1, le=30)
     passes_per_satellite: int = Field(default=1, ge=1, le=20)
     batch_size: int = Field(default=20, ge=1, le=50)
+    api_request_interval_seconds: float = Field(default=4.0, ge=0.5, le=30)
     retry_individually: bool = True
     problem_threshold: int = Field(default=3, ge=1, le=20)
     conflict_buffer_seconds: int = Field(default=300, ge=0, le=3600)
@@ -170,4 +171,3 @@ class ImportEnvelope(BaseModel):
     exported_at: datetime | None = None
     settings: dict[str, Any] = Field(default_factory=dict)
     watch_targets: list[dict[str, Any]] = Field(default_factory=list)
-

@@ -32,7 +32,13 @@ from app.targets import TargetRepository
 logging.basicConfig(level=getattr(logging, ENV.log_level, logging.INFO))
 database = configure_database(ENV.database_path)
 cache = PersistentCache(database)
-client = SatNOGSClient(cache, ENV.api_token)
+client = SatNOGSClient(
+    cache,
+    ENV.api_token,
+    request_interval_seconds=lambda: get_scheduler_settings(
+        database
+    ).api_request_interval_seconds,
+)
 targets = TargetRepository(database)
 planner = Planner(client, targets)
 executor = ScheduleExecutor(database, client, targets)
