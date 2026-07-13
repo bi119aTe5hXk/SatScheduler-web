@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -102,6 +103,34 @@ async def test_observation_pages_use_supported_time_filters(database: Database, 
     assert requests[1]["ground_station"] == 4856
     assert "end" in requests[1]
     assert "future" not in requests[1]
+
+
+@pytest.mark.asyncio
+async def test_reception_pages_reuse_one_hour_cache(database: Database, monkeypatch):
+    client = SatNOGSClient(PersistentCache(database), "")
+    calls = 0
+
+    class Response:
+        headers: dict = {}
+
+        @staticmethod
+        def json():
+            return [{"id": 123}]
+
+    async def fake_get(url, params=None):
+        nonlocal calls
+        calls += 1
+        return Response()
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    first = await client.observation_page(4856, future=False)
+    second = await client.observation_page(4856, future=False)
+    await client.close()
+
+    assert first["results"] == second["results"] == [{"id": 123}]
+    assert "payload" not in second["cache"]
+    json.dumps(second)
+    assert calls == 1
 
 
 def test_sort_modes_are_distinct():

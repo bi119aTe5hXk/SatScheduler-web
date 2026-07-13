@@ -208,10 +208,12 @@ async def observations_overview(force: bool = False):
 
 
 @app.get("/api/observations/receptions")
-async def observations_receptions(cursor: str | None = Query(default=None)):
+async def observations_receptions(
+    cursor: str | None = Query(default=None), force: bool = False
+):
     station = await resolve_station(database, client)
     return await client.observation_page(
-        station.station_id, future=False, cursor=cursor, use_cache=False
+        station.station_id, future=False, cursor=cursor, use_cache=True, force=force
     )
 
 

@@ -249,7 +249,11 @@ class SatNOGSClient:
         payload, metadata = await self.cache.get_or_fetch(
             key, "observations", ONE_HOUR, fetch, force=force
         )
-        payload["cache"] = metadata
+        # Do not embed metadata["payload"] back into the payload itself: that creates
+        # a recursive object which FastAPI cannot serialize.
+        payload["cache"] = {
+            name: value for name, value in metadata.items() if name != "payload"
+        }
         return payload
 
     async def observation(self, observation_id: int) -> dict[str, Any]:

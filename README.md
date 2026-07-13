@@ -27,8 +27,7 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Cursor-paginated Reception archive.
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
-- Persistent one-hour caches for satellite, transmitter, TLE, station and upcoming timelines.
-- Uncached Reception loading whenever the page is opened or refreshed.
+- Persistent one-hour caches for satellite, transmitter, TLE, station, Upcoming and Reception lists.
 - File and pasted-JSON import/export using the iOS-compatible SatScheduler watch-list format.
 
 ## Run with Docker Compose
@@ -71,10 +70,11 @@ docker buildx build --platform linux/amd64,linux/arm/v7 -t IMAGE --push .
 
 ## Cache behavior
 
-Satellite catalogs, per-satellite transmitters, batched TLEs, station details and upcoming
-Observation pages use a persistent one-hour TTL in SQLite. A manual refresh bypasses the TTL.
-Reception pages, observation details and their artifact URLs never use this cache. Successful
-scheduling invalidates upcoming Observation pages immediately.
+Satellite catalogs, per-satellite transmitters, batched TLEs, station details, Upcoming pages and
+Reception pages use a persistent one-hour TTL in SQLite. The web UI also keeps satellite and
+Observation lists for one hour so reopening a page does not make another backend request. A manual
+refresh bypasses both cache layers. Observation details and their artifact URLs remain uncached.
+Successful scheduling invalidates upcoming Observation pages immediately.
 
 Per-transmitter Network statistics are fetched only while adding/editing a watch target and kept
 for 24 hours. The recent-good recommendation is cached for one hour. The selected transmitter's
