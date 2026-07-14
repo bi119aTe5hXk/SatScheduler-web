@@ -225,7 +225,9 @@ async def settings_get():
 
 @app.put("/api/settings", response_model=SchedulerSettings)
 async def settings_put(value: SchedulerSettings):
+    global plan_job
     save_scheduler_settings(database, value)
+    plan_job = {"status": "idle"}
     automatic_scheduler.reschedule()
     return value
 

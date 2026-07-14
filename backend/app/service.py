@@ -10,15 +10,26 @@ from app.satnogs import SatNOGSClient
 
 
 SETTINGS_KEY = "scheduler_settings"
+HORIZON_48_MIGRATION_KEY = "scheduler_horizon_default_48_migrated"
 
 
 def get_scheduler_settings(database: Database) -> SchedulerSettings:
     raw = database.get_setting(SETTINGS_KEY, {})
+    if (
+        raw
+        and raw.get("horizon_hours") == 24
+        and not database.get_setting(HORIZON_48_MIGRATION_KEY, False)
+    ):
+        raw = {**raw, "horizon_hours": 48}
+        database.set_setting(SETTINGS_KEY, raw)
+        database.set_setting(HORIZON_48_MIGRATION_KEY, True)
+        database.set_setting("latest_plan_result", {})
     return SchedulerSettings.model_validate(raw)
 
 
 def save_scheduler_settings(database: Database, value: SchedulerSettings) -> None:
     database.set_setting(SETTINGS_KEY, value.model_dump(mode="json"))
+    database.set_setting("latest_plan_result", {})
 
 
 async def resolve_station(database: Database, client: SatNOGSClient) -> StationConfig:
@@ -49,4 +60,3 @@ async def resolve_station(database: Database, client: SatNOGSClient) -> StationC
         timezone=timezone_name,
         station_name=remote.get("name") or saved.get("station_name"),
     )
-

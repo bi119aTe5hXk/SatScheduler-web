@@ -20,12 +20,15 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
   SatNOGS default priority scoring.
 - Manual plan preview that selects every non-conflicting pass, supports removing/reordering the
   review list, and requires confirmation before batch submission.
+- iOS-compatible conflict handling: the configurable safety buffer applies around existing
+  SatNOGS Observations, while candidates selected in the same plan use their actual pass times.
 - Live per-observation submission states (waiting, scheduling, scheduled or failed with the API
   error) plus per-observation fallback after a batch failure.
 - Server-side background plan/submission jobs with live TLE, orbit-prediction, Observation-page,
   ranking, selection, batch and retry progress.
 - One-hour persistent plan-result cache; leaving the Schedule page does not cancel active work.
-- Daily station-local-time or fixed-hour automatic execution, limited to a 48-hour horizon.
+- Daily station-local-time or fixed-hour automatic execution, using a 48-hour default and maximum
+  planning horizon.
 - Overview card for the next observation with live listening state/countdowns, transmitter details,
   pass geometry and a polar plot.
 - Background-paginated Upcoming view with live page/record progress, a matching 48-hour timeline,

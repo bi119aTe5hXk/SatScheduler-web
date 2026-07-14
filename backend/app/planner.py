@@ -101,12 +101,15 @@ def select_non_conflicting(
     buffer_seconds: int,
     satellites_per_run: int,
 ) -> tuple[list[PredictedPass], list[dict[str, Any]]]:
-    occupied: list[tuple[datetime, datetime, str]] = []
+    existing_intervals: list[tuple[datetime, datetime, str]] = []
     for observation in observations:
         start = _parse_remote_datetime(observation.get("start"))
         end = _parse_remote_datetime(observation.get("end"))
         if start and end:
-            occupied.append((start, end, f"observation:{observation.get('id', '?')}"))
+            existing_intervals.append(
+                (start, end, f"observation:{observation.get('id', '?')}")
+            )
+    selected_intervals: list[tuple[datetime, datetime, str]] = []
     selected: list[PredictedPass] = []
     skipped: list[dict[str, Any]] = []
     admitted_targets: set[UUID] = set()
@@ -117,17 +120,30 @@ def select_non_conflicting(
                 {"pass": item.model_dump(mode="json"), "reason": "satellite_run_limit"}
             )
             continue
-        start, end = item.start - buffer, item.end + buffer
+        buffered_start, buffered_end = item.start - buffer, item.end + buffer
         conflict = next(
-            (label for occupied_start, occupied_end, label in occupied if start < occupied_end and occupied_start < end),
+            (
+                label
+                for occupied_start, occupied_end, label in existing_intervals
+                if buffered_start < occupied_end and occupied_start < buffered_end
+            ),
             None,
         )
+        if not conflict:
+            conflict = next(
+                (
+                    label
+                    for selected_start, selected_end, label in selected_intervals
+                    if item.start < selected_end and selected_start < item.end
+                ),
+                None,
+            )
         if conflict:
             skipped.append({"pass": item.model_dump(mode="json"), "reason": "conflict", "with": conflict})
             continue
         selected.append(item)
         admitted_targets.add(item.target_id)
-        occupied.append((start, end, f"selected:{item.target_id}"))
+        selected_intervals.append((item.start, item.end, f"selected:{item.target_id}"))
     return selected, skipped
 
 

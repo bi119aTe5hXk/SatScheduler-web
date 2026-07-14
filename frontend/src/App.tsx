@@ -17,7 +17,7 @@ const NAV: Array<{ id: Page; label: string; mark: string }> = [
 const defaultSettings: Settings = {
   prediction_engine: 'satnogs_predict', comparison_enabled: false,
   sort_mode: 'list_priority', trigger_mode: 'disabled', daily_time_local: '03:00',
-  interval_hours: 6, horizon_hours: 24, lead_minutes: 10, satellites_per_run: 30,
+  interval_hours: 6, horizon_hours: 48, lead_minutes: 10, satellites_per_run: 30,
   batch_size: 20, api_request_interval_seconds: 4, retry_individually: true,
   problem_threshold: 3, conflict_buffer_seconds: 300,
 }

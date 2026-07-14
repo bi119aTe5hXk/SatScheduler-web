@@ -21,6 +21,7 @@ from app.schemas import (
     WatchTarget,
 )
 from app.satnogs import SatNOGSClient, merge_transmitter_insights
+from app.service import get_scheduler_settings
 from app.targets import TargetRepository
 
 
@@ -316,6 +317,39 @@ def test_all_non_conflicting_passes_for_an_admitted_satellite_are_selected():
 
     assert selected == [first, second]
     assert skipped == []
+
+
+def test_conflict_buffer_applies_to_existing_observations_but_not_selected_passes():
+    target = make_target(0, "Adjacent passes")
+    first = make_pass(target, 80)
+    second = make_pass(target, 70)
+    second.start += timedelta(minutes=11)
+    second.peak += timedelta(minutes=11)
+    second.end += timedelta(minutes=11)
+
+    selected, skipped = select_non_conflicting([first, second], [], 300, 1)
+
+    assert selected == [first, second]
+    assert skipped == []
+
+    existing = {
+        "id": 789,
+        "start": (first.end + timedelta(minutes=1)).isoformat(),
+        "end": (first.end + timedelta(minutes=6)).isoformat(),
+    }
+    selected, skipped = select_non_conflicting([first], [existing], 300, 1)
+
+    assert selected == []
+    assert skipped[0]["with"] == "observation:789"
+
+
+def test_legacy_default_horizon_is_migrated_to_48_hours(database: Database):
+    database.set_setting("scheduler_settings", {"horizon_hours": 24})
+
+    settings = get_scheduler_settings(database)
+
+    assert settings.horizon_hours == 48
+    assert database.get_setting("scheduler_horizon_default_48_migrated") is True
 
 
 @pytest.mark.asyncio
