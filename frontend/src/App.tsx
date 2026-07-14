@@ -30,8 +30,15 @@ const observationViewCache: Partial<Record<'upcoming' | 'receptions', Observatio
   try { return JSON.parse(localStorage.getItem(OBSERVATION_CACHE_KEY) || '{}') } catch { return {} }
 })()
 
+function activeUpcoming(items: Observation[], now = Date.now()): Observation[] {
+  return items.filter(item => {
+    const end = new Date(item.end || item.start || 0).getTime()
+    return Number.isFinite(end) && end > now
+  })
+}
+
 function saveObservationCache(kind: 'upcoming' | 'receptions', entry: ObservationCacheEntry) {
-  observationViewCache[kind] = { ...entry, updatedAt: Date.now() }
+  observationViewCache[kind] = { ...entry, items: kind === 'upcoming' ? activeUpcoming(entry.items) : entry.items, updatedAt: Date.now() }
   try { localStorage.setItem(OBSERVATION_CACHE_KEY, JSON.stringify(observationViewCache)) } catch { /* storage may be unavailable */ }
 }
 
@@ -40,7 +47,7 @@ function mergeUpcomingCache(additions: Observation[]): Observation[] {
   const byId = new Map<number, Observation>()
   for (const item of previous?.items || []) byId.set(item.id, item)
   for (const item of additions) byId.set(item.id, { ...byId.get(item.id), ...item })
-  const items = [...byId.values()].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+  const items = activeUpcoming([...byId.values()]).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
   saveObservationCache('upcoming', { items, cursor: previous?.cursor || null, pages: previous?.pages || 1, expiresAt: previous?.expiresAt ?? Date.now() + CLIENT_CACHE_TTL })
   return items
 }
@@ -117,7 +124,7 @@ function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string
 
 function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; targets: Target[]; onNavigate: (p: Page, observationId?: number) => void; onNotify: Notify }) {
   const now = useClock()
-  const [upcoming, setUpcoming] = useState<Observation[]>(observationViewCache.upcoming?.items || [])
+  const [upcoming, setUpcoming] = useState<Observation[]>(activeUpcoming(observationViewCache.upcoming?.items || []))
   const [receptions, setReceptions] = useState<Observation[]>(observationViewCache.receptions?.items || [])
   const [refreshing, setRefreshing] = useState(false), [refreshingReceptions, setRefreshingReceptions] = useState(false)
   const refreshInFlight = useRef(false), receptionRefreshInFlight = useRef(false)
@@ -125,7 +132,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
     if (refreshInFlight.current) return
     refreshInFlight.current = true; setRefreshing(true)
     try {
-      const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = value.results || []
+      const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = activeUpcoming(value.results || [])
       saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
       setUpcoming(items)
     } finally { refreshInFlight.current = false; setRefreshing(false) }
@@ -148,19 +155,20 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
     if (freshClientCache(observationViewCache.receptions)) return
     void refreshReceptions(false).catch(() => {})
   }, [])
-  const next = useMemo(() => [...upcoming].filter(item => new Date(item.end || item.start || 0).getTime() > now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [upcoming, now])
-  const upcomingList = useMemo(() => [...upcoming].filter(item => new Date(item.end || item.start || 0).getTime() > now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime()).slice(0, 6), [upcoming, now])
+  const visibleUpcoming = useMemo(() => activeUpcoming(upcoming, now.getTime()), [upcoming, now])
+  const next = useMemo(() => [...visibleUpcoming].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [visibleUpcoming])
+  const upcomingList = useMemo(() => [...visibleUpcoming].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime()).slice(0, 6), [visibleUpcoming])
   const receptionList = useMemo(() => [...receptions].sort((a, b) => new Date(b.end || b.start || 0).getTime() - new Date(a.end || a.start || 0).getTime()).slice(0, 6), [receptions])
   return <div className="page">
     <PageHeader eyebrow="GROUND CONTROL / SINGLE STATION" title="Observation overview" action={<button className="primary" onClick={() => onNavigate('schedule')}>Build schedule</button>} />
     <section className="hero-grid">
       <div className="utc-card"><small>LIVE UNIVERSAL TIME</small><strong>{now.toISOString().slice(11, 19)}</strong><span>{now.toISOString().slice(0, 10)} · UTC</span></div>
       <Metric label="Enabled satellites" value={String(targets.filter(t => t.enabled).length)} detail={`${targets.length} total watch targets`} />
-      <Metric label="Upcoming" value={String(upcoming.length)} detail="Loaded first page" />
+      <Metric label="Upcoming" value={String(visibleUpcoming.length)} detail="Active cached observations" />
       <Metric label="Next automatic run" value={config?.automatic_job?.enabled ? 'ARMED' : 'OFF'} detail={formatUtc(config?.automatic_job?.next_run_at)} />
     </section>
     <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW{refreshing ? ' · updating in background' : ''}</small><h2>Station timeline</h2></div><button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div>
-      <Timeline observations={upcoming} />
+      <Timeline observations={visibleUpcoming} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
       {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl></div><PolarPlot observation={next} now={now} /></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
@@ -363,14 +371,15 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
 }
 
 function ObservationList({ future, title, initialSelected, onNotify }: { future: boolean; title: string; initialSelected: number | null; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
+  const now = useClock()
   const initialCache = observationViewCache[future ? 'upcoming' : 'receptions']
-  const [items, setItems] = useState<Observation[]>(initialCache?.items || []), [cursor, setCursor] = useState<string | null>(initialCache?.cursor || null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(initialSelected)
+  const [items, setItems] = useState<Observation[]>(future ? activeUpcoming(initialCache?.items || []) : initialCache?.items || []), [cursor, setCursor] = useState<string | null>(initialCache?.cursor || null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(initialSelected)
   const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
   const loadUpcoming = async (force = false, silent = false) => {
     const cached = observationViewCache.upcoming
-    if (!force && freshClientCache(cached)) { setItems(cached.items); setCursor(cached.cursor); setProgress({ page: cached.pages, records: cached.items.length }); return }
+    if (!force && freshClientCache(cached)) { const active = activeUpcoming(cached.items); setItems(active); setCursor(cached.cursor); setProgress({ page: cached.pages, records: active.length }); return }
     if (silent && request.current) return
     request.current?.abort()
     const controller = new AbortController()
@@ -387,7 +396,8 @@ function ObservationList({ future, title, initialSelected, onNotify }: { future:
         pages += 1
         for (const item of data.results || []) if (!seenIds.has(item.id)) { seenIds.add(item.id); collected.push(item) }
         collected.sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
-        setItems([...collected]); setProgress({ page: pages, records: collected.length })
+        const active = activeUpcoming(collected)
+        setItems(active); setProgress({ page: pages, records: active.length })
         nextCursor = data.next_cursor || null
         if (!nextCursor || seenCursors.has(nextCursor)) break
         seenCursors.add(nextCursor)
@@ -421,7 +431,7 @@ function ObservationList({ future, title, initialSelected, onNotify }: { future:
   }
   useEffect(() => {
     const cached = observationViewCache[future ? 'upcoming' : 'receptions']
-    setItems(cached?.items || []); setCursor(cached?.cursor || null); setSelected(initialSelected)
+    setItems(future ? activeUpcoming(cached?.items || []) : cached?.items || []); setCursor(cached?.cursor || null); setSelected(initialSelected)
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
     return () => request.current?.abort()
   }, [future])
@@ -429,9 +439,9 @@ function ObservationList({ future, title, initialSelected, onNotify }: { future:
   if (selected != null) return <ObservationDetail observationId={selected} future={future} onBack={() => setSelected(null)} />
   const receptionStatus = (item: Observation): 'good' | 'bad' | 'unknown' => item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'unknown'
   const statusCounts = items.reduce((counts, item) => { counts[receptionStatus(item)] += 1; return counts }, { good: 0, bad: 0, unknown: 0 })
-  const visibleItems = future || receptionFilter === 'all' ? items : items.filter(item => receptionStatus(item) === receptionFilter)
+  const visibleItems = future ? activeUpcoming(items, now.getTime()) : receptionFilter === 'all' ? items : items.filter(item => receptionStatus(item) === receptionFilter)
   return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => future ? loadUpcoming(true) : loadReceptionPage(true, true)}>{loading ? (future ? 'Restart refresh' : 'Refreshing…') : 'Refresh'}</button>} />
-    {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{items.length} observations</span></div><Timeline observations={items} /></section>}
+    {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{visibleItems.length} observations</span></div><Timeline observations={visibleItems} /></section>}
     {future && loading && <div className="fetch-progress"><span className="spinner" /><div><strong>{progress.page ? `Fetching page ${progress.page + 1}…` : 'Starting background update…'}</strong><small>{progress.page} page{progress.page === 1 ? '' : 's'} · {progress.records} observations loaded</small></div></div>}
     {!future && <section className="reception-filters" aria-label="Reception status filter"><span>STATUS</span>{(['all', 'good', 'bad', 'unknown'] as const).map(status => <button key={status} className={receptionFilter === status ? 'active' : ''} onClick={() => setReceptionFilter(status)}>{status}<strong>{status === 'all' ? items.length : statusCounts[status]}</strong></button>)}<small>Counts apply to the {items.length} loaded records.</small></section>}
     <div className="panel observation-list">{visibleItems.map(item => <button className="observation-row" key={item.id} onClick={() => setSelected(item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><small>{item.vetted_status || (future ? 'scheduled' : 'unknown')}</small></div><span className="detail-chevron">View detail →</span></button>)}{!visibleItems.length && !loading && <div className="empty">{!future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
