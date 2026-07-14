@@ -5,7 +5,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 
 ## Current features
 
-- Ordered watch list with drag-and-drop, up/down controls, and multi-select move-to-top.
+- Ordered watch list with drag-and-drop, up/down controls, multi-select move-to-top and confirmed
+  batch deletion.
 - Searchable satellite picker matching name, aliases, SatNOGS ID and NORAD ID, with a visible
   catalog loading state and a 100-row render limit.
 - Satellite and transmitter selection from SatNOGS DB.
@@ -38,6 +39,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
   pass geometry and a polar plot.
 - Background-paginated Upcoming view with live page/record progress, a matching 48-hour timeline,
   force refresh and completion/failure notifications.
+- Overview retains the stale timeline during background pagination and exposes the current page and
+  active-observation count until the refreshed timeline is ready.
 - UTC-driven local timeline expiry/reordering, local Reception search across loaded observation and
   radio fields, Observer labels, colored reception states and compact pass Polar Plots in both lists.
 - Cursor-paginated Reception archive with loaded-record Good/Bad/Unknown filtering.

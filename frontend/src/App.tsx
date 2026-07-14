@@ -127,13 +127,28 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
   const [upcoming, setUpcoming] = useState<Observation[]>(activeUpcoming(observationViewCache.upcoming?.items || []))
   const [receptions, setReceptions] = useState<Observation[]>(observationViewCache.receptions?.items || [])
   const [refreshing, setRefreshing] = useState(false), [refreshingReceptions, setRefreshingReceptions] = useState(false)
+  const [refreshProgress, setRefreshProgress] = useState({ page: 0, records: 0 })
   const refreshInFlight = useRef(false), receptionRefreshInFlight = useRef(false)
   const refreshTimeline = async (force = false) => {
     if (refreshInFlight.current) return
-    refreshInFlight.current = true; setRefreshing(true)
+    refreshInFlight.current = true; setRefreshing(true); setRefreshProgress({ page: 0, records: 0 })
     try {
-      const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = activeUpcoming(value.results || [])
-      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
+      const collected: Observation[] = [], seenIds = new Set<number>(), seenCursors = new Set<string>()
+      let cursor: string | null = null, pages = 0
+      while (pages < 20) {
+        const params = new URLSearchParams()
+        if (cursor) params.set('cursor', cursor)
+        if (force) params.set('force', 'true')
+        const value = await api<any>(`/observations/upcoming${params.size ? `?${params}` : ''}`)
+        pages += 1
+        for (const item of value.results || []) if (!seenIds.has(item.id)) { seenIds.add(item.id); collected.push(item) }
+        setRefreshProgress({ page: pages, records: activeUpcoming(collected).length })
+        const nextCursor = value.next_cursor || null
+        if (!nextCursor || seenCursors.has(nextCursor)) { cursor = null; break }
+        seenCursors.add(nextCursor); cursor = nextCursor
+      }
+      const items = activeUpcoming(collected).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+      saveObservationCache('upcoming', { items, cursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
       setUpcoming(items)
     } finally { refreshInFlight.current = false; setRefreshing(false) }
   }
@@ -173,7 +188,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
       <Metric label="Upcoming" value={String(visibleUpcoming.length)} detail="Active cached observations" />
       <Metric label="Next automatic run" value={config?.automatic_job?.enabled ? 'ARMED' : 'OFF'} detail={formatUtc(config?.automatic_job?.next_run_at)} />
     </section>
-    <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW{refreshing ? ' · updating in background' : ''}</small><h2>Station timeline</h2></div><button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div>
+    <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Station timeline</h2></div><div className="timeline-update-actions">{refreshing && <span className="timeline-update-status"><i className="spinner" /><span><strong>{refreshProgress.page ? `Updating · page ${refreshProgress.page}` : 'Starting background update…'}</strong><small>{refreshProgress.records} active observations loaded</small></span></span>}<button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div></div>
       <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
@@ -286,9 +301,11 @@ function Targets({ targets, onChanged, onNotify }: { targets: Target[]; onChange
   const move = async (index: number, offset: number) => { const next = [...targets]; const destination = index + offset; if (destination < 0 || destination >= next.length) return; [next[index], next[destination]] = [next[destination], next[index]]; await reorder(next) }
   const toggleSelected = (id: string) => setSelectedIds(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const moveSelectedToTop = async () => { if (!selectedIds.size) return; const selected = targets.filter(target => selectedIds.has(target.id)), remaining = targets.filter(target => !selectedIds.has(target.id)); await reorder([...selected, ...remaining], `${selected.length} selected satellites moved to the top.`); setSelectedIds(new Set()) }
+  const deleteSelected = async () => { const selected = targets.filter(target => selectedIds.has(target.id)); if (!selected.length || !confirm(`Delete ${selected.length} selected satellites from the watch list? This cannot be undone.`)) return; await Promise.all(selected.map(target => api(`/targets/${target.id}`, { method: 'DELETE' }))); setSelectedIds(new Set()); await onChanged(); onNotify(`${selected.length} satellites deleted from the watch list.`, 'success') }
   const dropTarget = async (event: React.DragEvent<HTMLDivElement>, targetId: string) => { event.preventDefault(); if (!draggingId || draggingId === targetId) { setDraggingId(null); return } const moving = targets.find(target => target.id === draggingId); if (!moving) return; const next = targets.filter(target => target.id !== draggingId), targetIndex = next.findIndex(target => target.id === targetId), rect = event.currentTarget.getBoundingClientRect(), after = event.clientY > rect.top + rect.height / 2; next.splice(Math.max(0, targetIndex + (after ? 1 : 0)), 0, moving); setDraggingId(null); await reorder(next, `${moving.satellite_name || moving.name} moved.`) }
-  const remove = async (id: string) => { if (!confirm('Delete this watch target?')) return; const name = targets.find(target => target.id === id)?.satellite_name || targets.find(target => target.id === id)?.name || 'Satellite'; await api(`/targets/${id}`, { method: 'DELETE' }); await onChanged(); onNotify(`${name} deleted from the watch list.`, 'success') }
-  return <div className="page"><PageHeader eyebrow="WATCH TARGETS" title="Satellite priority list" action={<div className="button-row"><button className="ghost" disabled={!selectedIds.size} onClick={() => moveSelectedToTop().catch(error => onNotify(String(error), 'error'))}>Move selected to top ({selectedIds.size})</button><button className="primary" onClick={() => setEditing('new')}>Add satellite</button></div>} />
+  const remove = async (id: string) => { if (!confirm('Delete this watch target?')) return; const name = targets.find(target => target.id === id)?.satellite_name || targets.find(target => target.id === id)?.name || 'Satellite'; await api(`/targets/${id}`, { method: 'DELETE' }); setSelectedIds(current => { const next = new Set(current); next.delete(id); return next }); await onChanged(); onNotify(`${name} deleted from the watch list.`, 'success') }
+  return <div className="page"><PageHeader eyebrow="WATCH TARGETS" title="Satellite list" action={<div className="button-row"><button className="danger" disabled={!selectedIds.size} onClick={() => deleteSelected().catch(error => onNotify(String(error), 'error'))}>Delete selected ({selectedIds.size})</button><button className="ghost" disabled={!selectedIds.size} onClick={() => moveSelectedToTop().catch(error => onNotify(String(error), 'error'))}>Move selected to top ({selectedIds.size})</button><button className="primary" onClick={() => setEditing('new')}>Add satellite</button></div>} />
+    <p className="page-intro">The list order is the scheduling priority: satellites nearer the top are considered first in list-based sort modes.</p>
     {targets.length > 0 && <div className="target-bulk-toolbar"><label><input type="checkbox" checked={selectedIds.size === targets.length} onChange={event => setSelectedIds(event.target.checked ? new Set(targets.map(target => target.id)) : new Set())} /> Select all</label><span>Drag the grip to reorder, or select several satellites and move them to the top.</span></div>}
     <div className="panel target-table">{targets.length === 0 && <div className="empty">No satellites yet. Add the first watch target.</div>}{targets.map((target, index) => <div className={`target-row ${draggingId === target.id ? 'dragging' : ''}`} key={target.id} onDragOver={event => { if (draggingId) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }} onDrop={event => dropTarget(event, target.id).catch(error => onNotify(String(error), 'error'))}>
       <label className="target-select" title={`Select ${target.satellite_name || target.name}`}><input type="checkbox" checked={selectedIds.has(target.id)} onChange={() => toggleSelected(target.id)} /></label>
