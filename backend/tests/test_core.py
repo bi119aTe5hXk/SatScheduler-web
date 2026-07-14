@@ -11,6 +11,7 @@ from app.cache import PersistentCache
 from app.db import Database
 from app.executor import ScheduleExecutor
 from app.import_export import export_configuration, import_configuration
+from app.jobs import AutomaticScheduler, SCHEDULE_JOB_ID, UPCOMING_REFRESH_JOB_ID
 from app.planner import pass_allowed, select_non_conflicting, sort_passes
 from app.schemas import (
     PredictedPass,
@@ -64,6 +65,23 @@ def make_pass(target: WatchTarget, peak_elevation: float) -> PredictedPass:
         azimuth_samples=[300, 0, 60],
         engine=PredictionEngineName.SKYFIELD,
     )
+
+
+def test_upcoming_refresh_job_is_independent_from_batch_schedule(database: Database):
+    settings = SchedulerSettings(
+        trigger_mode="disabled",
+        upcoming_auto_refresh_enabled=True,
+        upcoming_auto_refresh_hours=12,
+    )
+    database.set_setting("scheduler_settings", settings.model_dump(mode="json"))
+    automatic = AutomaticScheduler(database, object(), object())
+
+    automatic.reschedule()
+
+    assert automatic.scheduler.get_job(SCHEDULE_JOB_ID) is None
+    refresh_job = automatic.scheduler.get_job(UPCOMING_REFRESH_JOB_ID)
+    assert refresh_job is not None
+    assert refresh_job.trigger.interval == timedelta(hours=12)
 
 
 @pytest.mark.asyncio
