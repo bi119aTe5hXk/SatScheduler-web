@@ -91,6 +91,8 @@ refresh bypasses both cache layers. Observation details and their artifact URLs 
 Upcoming and Reception summaries also persist in browser storage and use stale-while-revalidate:
 expired data remains visible while a background refresh runs. Successful scheduling is merged into
 both the server's existing Upcoming cache and the browser cache immediately instead of clearing it.
+An optional 1–24 hour Upcoming auto-refresh keeps an open Overview, Schedule or Upcoming page
+in sync with reservations created by other clients without hiding the currently displayed data.
 
 The latest completed planning result is stored for one hour. Opening Schedule restores that result
 without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation

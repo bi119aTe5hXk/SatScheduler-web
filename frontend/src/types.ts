@@ -56,6 +56,8 @@ export type Settings = {
   trigger_mode: 'disabled' | 'daily' | 'interval'
   daily_time_local: string
   interval_hours: number
+  upcoming_auto_refresh_enabled: boolean
+  upcoming_auto_refresh_hours: number
   horizon_hours: number
   lead_minutes: number
   satellites_per_run: number

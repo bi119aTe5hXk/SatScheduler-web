@@ -17,7 +17,8 @@ const NAV: Array<{ id: Page; label: string; mark: string }> = [
 const defaultSettings: Settings = {
   prediction_engine: 'satnogs_predict', comparison_enabled: false,
   sort_mode: 'list_priority', trigger_mode: 'disabled', daily_time_local: '03:00',
-  interval_hours: 6, horizon_hours: 48, lead_minutes: 10, satellites_per_run: 15,
+  interval_hours: 6, upcoming_auto_refresh_enabled: false, upcoming_auto_refresh_hours: 6,
+  horizon_hours: 48, lead_minutes: 10, satellites_per_run: 15,
   api_request_interval_seconds: 4, retry_individually: true, conflict_buffer_seconds: 300,
 }
 
@@ -89,11 +90,11 @@ export default function App() {
     </aside>
     <main>
       {notice && <button className={`notice ${notice.tone}`} onClick={() => setNotice(null)}>{notice.message}</button>}
-      {page === 'dashboard' && <Dashboard config={config} targets={targets} onNavigate={setPage} />}
+      {page === 'dashboard' && <Dashboard config={config} settings={settings} targets={targets} onNavigate={setPage} />}
       {page === 'targets' && <Targets targets={targets} onChanged={reload} onNotify={notify} />}
       {page === 'schedule' && <Schedule settings={settings} targets={targets} onNotify={notify} />}
-      {page === 'observations' && <ObservationList future title="Upcoming observations" onNotify={notify} />}
-      {page === 'receptions' && <ObservationList future={false} title="Reception archive" onNotify={notify} />}
+      {page === 'observations' && <ObservationList future title="Upcoming observations" settings={settings} onNotify={notify} />}
+      {page === 'receptions' && <ObservationList future={false} title="Reception archive" settings={settings} onNotify={notify} />}
       {page === 'settings' && <SettingsPage value={settings} config={config} onSaved={reload} onNotify={notify} />}
     </main>
   </div>
@@ -103,20 +104,30 @@ function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string
   return <header className="page-header"><div><small>{eyebrow}</small><h1>{title}</h1></div>{action}</header>
 }
 
-function Dashboard({ config, targets, onNavigate }: { config: any; targets: Target[]; onNavigate: (p: Page) => void }) {
+function Dashboard({ config, settings, targets, onNavigate }: { config: any; settings: Settings; targets: Target[]; onNavigate: (p: Page) => void }) {
   const now = useClock()
   const [upcoming, setUpcoming] = useState<Observation[]>(observationViewCache.upcoming?.items || [])
   const [refreshing, setRefreshing] = useState(false)
+  const refreshInFlight = useRef(false)
+  const refreshTimeline = async (force = false) => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true; setRefreshing(true)
+    try {
+      const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = value.results || []
+      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
+      setUpcoming(items)
+    } finally { refreshInFlight.current = false; setRefreshing(false) }
+  }
   useEffect(() => {
     const cached = observationViewCache.upcoming
     if (freshClientCache(cached)) return
-    setRefreshing(true)
-    api<any>('/observations/overview').then(value => {
-      const items = value.results || []
-      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
-      setUpcoming(items)
-    }).catch(() => {}).finally(() => setRefreshing(false))
+    void refreshTimeline(false).catch(() => {})
   }, [])
+  useEffect(() => {
+    if (!settings.upcoming_auto_refresh_enabled) return
+    const timer = window.setInterval(() => void refreshTimeline(true).catch(() => {}), settings.upcoming_auto_refresh_hours * 3_600_000)
+    return () => window.clearInterval(timer)
+  }, [settings.upcoming_auto_refresh_enabled, settings.upcoming_auto_refresh_hours])
   const next = useMemo(() => [...upcoming].filter(item => new Date(item.end || item.start || 0).getTime() > now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [upcoming, now])
   return <div className="page">
     <PageHeader eyebrow="GROUND CONTROL / SINGLE STATION" title="Observation overview" action={<button className="primary" onClick={() => onNavigate('schedule')}>Build schedule</button>} />
@@ -257,7 +268,16 @@ function TransmitterStatsBar({ transmitter }: { transmitter: TransmitterInsight 
 function Schedule({ settings, targets, onNotify }: { settings: Settings; targets: Target[]; onNotify: Notify }) {
   const [plan, setPlan] = useState<any>(null), [draftPasses, setDraftPasses] = useState<Pass[]>([]), [planJob, setPlanJob] = useState<any>({ status: 'idle' }), [scheduleJob, setScheduleJob] = useState<any>({ status: 'idle' }), [result, setResult] = useState<any>(null)
   const [stationObservations, setStationObservations] = useState<Observation[]>(observationViewCache.upcoming?.items || []), [timelineLoading, setTimelineLoading] = useState(false)
-  const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null), loadedPlanJob = useRef<string | null>(null), processedScheduleJob = useRef<string | null>(null)
+  const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null), loadedPlanJob = useRef<string | null>(null), processedScheduleJob = useRef<string | null>(null), timelineRefreshInFlight = useRef(false)
+  const refreshStationTimeline = async (force = false) => {
+    if (timelineRefreshInFlight.current) return
+    timelineRefreshInFlight.current = true; setTimelineLoading(true)
+    try {
+      const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = value.results || []
+      setStationObservations(items)
+      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
+    } finally { timelineRefreshInFlight.current = false; setTimelineLoading(false) }
+  }
   const updateJobs = async () => {
     try {
       const [nextPlanJob, nextScheduleJob] = await Promise.all([api<any>('/plans/status'), api<any>('/schedules/status')])
@@ -289,13 +309,13 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
     const cached = observationViewCache.upcoming
     if (cached?.items.length) setStationObservations(cached.items)
     if (freshClientCache(cached)) return
-    setTimelineLoading(true)
-    api<any>('/observations/overview').then(value => {
-      const items = value.results || []
-      setStationObservations(items)
-      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
-    }).catch(error => onNotify(`Station timeline update failed: ${String(error)}`, 'error')).finally(() => setTimelineLoading(false))
+    void refreshStationTimeline(false).catch(error => onNotify(`Station timeline update failed: ${String(error)}`, 'error'))
   }, [])
+  useEffect(() => {
+    if (!settings.upcoming_auto_refresh_enabled) return
+    const timer = window.setInterval(() => void refreshStationTimeline(true).catch(error => onNotify(`Automatic timeline update failed: ${String(error)}`, 'error')), settings.upcoming_auto_refresh_hours * 3_600_000)
+    return () => window.clearInterval(timer)
+  }, [settings.upcoming_auto_refresh_enabled, settings.upcoming_auto_refresh_hours])
   useEffect(() => {
     if (planJob.status !== 'running' && scheduleJob.status !== 'running') return
     const timer = window.setInterval(() => void updateJobs(), 1000)
@@ -325,15 +345,16 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
   return <section className="panel job-progress"><div className="job-progress-heading"><span className="spinner" /><div><small>{label} · {String(job.stage || 'working').replaceAll('_', ' ')}</small><strong>{job.message || 'Working in the background…'}</strong></div>{current != null && <span>{current}{total ? ` / ${total}` : ''}</span>}{action}</div><div className={`job-progress-bar ${percentage == null ? 'indeterminate' : ''}`}><span style={percentage == null ? undefined : { width: `${percentage}%` }} /></div>{progress.records != null && <small>{progress.records} records loaded</small>}<p>Safe to leave this page. The task continues on the server.</p></section>
 }
 
-function ObservationList({ future, title, onNotify }: { future: boolean; title: string; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
+function ObservationList({ future, title, settings, onNotify }: { future: boolean; title: string; settings: Settings; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
   const initialCache = observationViewCache[future ? 'upcoming' : 'receptions']
   const [items, setItems] = useState<Observation[]>(initialCache?.items || []), [cursor, setCursor] = useState<string | null>(initialCache?.cursor || null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(null)
   const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
-  const loadUpcoming = async (force = false) => {
+  const loadUpcoming = async (force = false, silent = false) => {
     const cached = observationViewCache.upcoming
     if (!force && freshClientCache(cached)) { setItems(cached.items); setCursor(cached.cursor); setProgress({ page: cached.pages, records: cached.items.length }); return }
+    if (silent && request.current) return
     request.current?.abort()
     const controller = new AbortController()
     request.current = controller
@@ -355,7 +376,7 @@ function ObservationList({ future, title, onNotify }: { future: boolean; title: 
         seenCursors.add(nextCursor)
       }
       saveObservationCache('upcoming', { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
-      onNotify(`Upcoming observations updated: ${collected.length} records from ${pages} page${pages === 1 ? '' : 's'}.`, 'success')
+      if (!silent) onNotify(`Upcoming observations updated: ${collected.length} records from ${pages} page${pages === 1 ? '' : 's'}.`, 'success')
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
         if (collected.length) saveObservationCache('upcoming', { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
@@ -387,6 +408,11 @@ function ObservationList({ future, title, onNotify }: { future: boolean; title: 
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
     return () => request.current?.abort()
   }, [future])
+  useEffect(() => {
+    if (!future || !settings.upcoming_auto_refresh_enabled) return
+    const timer = window.setInterval(() => void loadUpcoming(true, true), settings.upcoming_auto_refresh_hours * 3_600_000)
+    return () => window.clearInterval(timer)
+  }, [future, settings.upcoming_auto_refresh_enabled, settings.upcoming_auto_refresh_hours])
   if (!future && selected != null) return <ObservationDetail observationId={selected} onBack={() => setSelected(null)} />
   const receptionStatus = (item: Observation): 'good' | 'bad' | 'unknown' => item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'unknown'
   const statusCounts = items.reduce((counts, item) => { counts[receptionStatus(item)] += 1; return counts }, { good: 0, bad: 0, unknown: 0 })
@@ -441,7 +467,7 @@ function SettingsPage({ value, config, onSaved, onNotify }: { value: Settings; c
   const importConfig = async () => { const payload = JSON.parse(importText), count = targetCount(payload); if (count == null) throw new Error('JSON does not contain a SatScheduler targets array.'); if (!confirm(`Import ${count} targets for station ${config?.station?.station_id || '—'} and replace the current watch list? Targets for other stations will be skipped.`)) return; const result = await api<{ imported: number; skipped_station_mismatch: number }>('/import?replace=true', { method: 'POST', body: JSON.stringify(payload) }); setImportText(''); setImportFileName(`Imported ${result.imported} · skipped ${result.skipped_station_mismatch} for station mismatch`); await onSaved(); onNotify(`Import completed: ${result.imported} targets imported, ${result.skipped_station_mismatch} skipped.`, 'success') }
   return <div className="page"><PageHeader eyebrow="SYSTEM CONFIGURATION" title="Scheduler settings" action={<button className="primary" onClick={() => save().catch(e => onNotify(String(e), 'error'))}>Save settings</button>} />
     <section className="split"><div className="panel"><div className="panel-title"><h2>Prediction and ranking</h2></div><div className="form-grid"><label>Primary engine<select value={form.prediction_engine} onChange={e => set('prediction_engine', e.target.value)}><option value="satnogs_predict">SatNOGS Predict</option><option value="skyfield">Direct Skyfield</option></select><small className="field-help">The engine used to calculate pass times, elevation and azimuth. This engine supplies the actual scheduling candidates.</small></label><label>Sort mode<select value={form.sort_mode} onChange={e => set('sort_mode', e.target.value)}><option value="list_priority">List priority</option><option value="list_priority_best_elevation">List priority + best elevation</option><option value="best_elevation">Best elevation only</option><option value="satnogs_default">SatNOG default mode</option></select><small className="field-help">Controls which candidate passes are considered first when passes conflict or a run limit is reached.</small></label></div><label className="check setting-check"><input type="checkbox" checked={form.comparison_enabled} onChange={e => set('comparison_enabled', e.target.checked)} /><span>Run the secondary prediction engine for comparison<small className="field-help">Calculates the same passes with the other engine and records timing differences. It does not change which engine schedules observations.</small></span></label></div>
-      <div className="panel"><div className="panel-title"><h2>Automatic execution</h2></div><div className="form-grid"><label>Mode<select value={form.trigger_mode} onChange={e => set('trigger_mode', e.target.value)}><option value="disabled">Disabled</option><option value="daily">Daily, station local time</option><option value="interval">Every N hours</option></select><small className="field-help">Choose whether automatic planning is disabled, runs once per local day, or repeats at an hourly interval.</small></label><label>Daily time<input type="time" value={form.daily_time_local} onChange={e => set('daily_time_local', e.target.value)} /><small className="field-help">Used only in Daily mode and interpreted in the station timezone configured by Docker Compose.</small></label><NumberField label="Interval hours" help="Used only in Every N hours mode. The interval is measured between automatic runs." value={form.interval_hours} min={1} max={48} onChange={v => set('interval_hours', v)} /><NumberField label="Horizon hours" help="How far ahead to predict and schedule. SatNOGS accepts at most 48 hours." value={form.horizon_hours} min={0.5} max={48} step={0.5} onChange={v => set('horizon_hours', v)} /><NumberField label="Lead time minutes" help="Starts the planning window this many minutes after calculation begins, avoiding observations too close to submit safely." value={form.lead_minutes} min={1} max={180} onChange={v => set('lead_minutes', v)} /></div></div></section>
+      <div className="panel"><div className="panel-title"><h2>Automatic execution</h2></div><div className="form-grid"><label>Mode<select value={form.trigger_mode} onChange={e => set('trigger_mode', e.target.value)}><option value="disabled">Disabled</option><option value="daily">Daily, station local time</option><option value="interval">Every N hours</option></select><small className="field-help">Choose whether automatic planning is disabled, runs once per local day, or repeats at an hourly interval.</small></label><label>Daily time<input type="time" value={form.daily_time_local} onChange={e => set('daily_time_local', e.target.value)} /><small className="field-help">Used only in Daily mode and interpreted in the station timezone configured by Docker Compose.</small></label><NumberField label="Interval hours" help="Used only in Every N hours mode. The interval is measured between automatic runs." value={form.interval_hours} min={1} max={48} onChange={v => set('interval_hours', v)} /><NumberField label="Horizon hours" help="How far ahead to predict and schedule. SatNOGS accepts at most 48 hours." value={form.horizon_hours} min={0.5} max={48} step={0.5} onChange={v => set('horizon_hours', v)} /><NumberField label="Lead time minutes" help="Starts the planning window this many minutes after calculation begins, avoiding observations too close to submit safely." value={form.lead_minutes} min={1} max={180} onChange={v => set('lead_minutes', v)} /><NumberField label="Upcoming refresh hours" help="When automatic Upcoming refresh is enabled, an open Overview, Schedule or Upcoming page fetches the station timeline every 1–24 hours." value={form.upcoming_auto_refresh_hours} min={1} max={24} step={1} onChange={v => set('upcoming_auto_refresh_hours', v)} /></div><label className="check setting-check"><input type="checkbox" checked={form.upcoming_auto_refresh_enabled} onChange={e => set('upcoming_auto_refresh_enabled', e.target.checked)} /><span>Automatically refresh Upcoming while the web app is open<small className="field-help">Keeps old timeline data visible while fetching changes made by another app or the SatNOGS website.</small></span></label></div></section>
     <section className="split"><div className="panel"><div className="panel-title"><h2>Batch and API policy</h2></div><div className="form-grid"><NumberField label="Satellites / run" help="Number of planned observations sent in each SatNOGS batch request. For example, 60 observations with a value of 15 are submitted as four API batches." value={form.satellites_per_run} min={1} max={50} onChange={v => set('satellites_per_run', v)} /><NumberField label="API request interval seconds" help="Minimum delay between real SatNOGS HTTP requests, including pagination and scheduling POSTs. It is not applied to local orbit calculations. 3–5 seconds is recommended to avoid HTTP 429." value={form.api_request_interval_seconds} min={0.5} max={30} step={0.5} onChange={v => set('api_request_interval_seconds', v)} /><NumberField label="Conflict buffer seconds" help="Safety margin applied only around reservations already present at the station. Planned passes are compared using their actual times. 300 seconds matches the iOS planner." value={form.conflict_buffer_seconds} min={0} max={3600} onChange={v => set('conflict_buffer_seconds', v)} /></div><label className="check setting-check"><input type="checkbox" checked={form.retry_individually} onChange={e => set('retry_individually', e.target.checked)} /><span>Retry failed batches one observation at a time<small className="field-help">All batch requests are attempted first. Afterwards, every observation from a failed batch is retried separately so one invalid pass does not block the rest.</small></span></label></div>
       <div className="panel"><div className="panel-title"><h2>Compose-managed station</h2></div><dl className="facts"><dt>API token</dt><dd>{config?.api_token_configured ? 'Configured' : 'Missing'}</dd><dt>Station</dt><dd>{config?.station?.station_id || 'Missing'}</dd><dt>Coordinates</dt><dd>{config?.station ? `${config.station.latitude}, ${config.station.longitude}, ${config.station.altitude_m} m` : 'Missing'}</dd><dt>Timezone</dt><dd>{config?.station?.timezone || 'UTC'}</dd></dl></div></section>
     <section className="panel"><div className="panel-title"><div><small>IOS-COMPATIBLE WATCH LIST</small><h2>Import and export</h2></div><button className="ghost" onClick={() => download().catch(e => onNotify(String(e), 'error'))}>Export JSON</button></div><div className="import-file"><label>Select a SatScheduler watch-list file<input type="file" accept=".json,application/json" onChange={e => { chooseFile(e.target.files?.[0]); e.target.value = '' }} /></label>{importFileName && <small>{importFileName}</small>}</div><textarea value={importText} onChange={e => { setImportText(e.target.value); setImportFileName(e.target.value ? 'Pasted JSON' : '') }} placeholder="Or paste an iOS-compatible SatScheduler JSON export here…" /><button className="primary" disabled={!importText.trim()} onClick={() => importConfig().catch(e => onNotify(String(e), 'error'))}>Replace watch list from JSON</button></section>

@@ -81,6 +81,8 @@ class SchedulerSettings(BaseModel):
     trigger_mode: TriggerMode = TriggerMode.DISABLED
     daily_time_local: str = "03:00"
     interval_hours: int = Field(default=6, ge=1, le=48)
+    upcoming_auto_refresh_enabled: bool = False
+    upcoming_auto_refresh_hours: int = Field(default=6, ge=1, le=24)
     horizon_hours: float = Field(default=48, gt=0, le=48)
     lead_minutes: int = Field(default=10, ge=1, le=180)
     satellites_per_run: int = Field(default=15, ge=1, le=50)

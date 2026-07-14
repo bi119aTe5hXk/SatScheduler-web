@@ -162,6 +162,26 @@ async def test_reception_pages_reuse_one_hour_cache(database: Database, monkeypa
     assert calls == 1
 
 
+@pytest.mark.asyncio
+async def test_forced_upcoming_refresh_forces_every_page(database: Database, monkeypatch):
+    client = SatNOGSClient(PersistentCache(database), "")
+    calls = []
+
+    async def fake_page(station_id, *, future, cursor=None, use_cache=True, force=False):
+        calls.append((station_id, cursor, force))
+        return {
+            "results": [{"id": len(calls)}],
+            "next_cursor": "page-2" if cursor is None else None,
+        }
+
+    monkeypatch.setattr(client, "observation_page", fake_page)
+    results = await client.all_future_observations(4856, force=True)
+    await client.close()
+
+    assert [value["id"] for value in results] == [1, 2]
+    assert calls == [(4856, None, True), (4856, "page-2", True)]
+
+
 def test_sort_modes_are_distinct():
     first = make_target(0, "First")
     second = make_target(1, "Second")

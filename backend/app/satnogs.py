@@ -312,7 +312,7 @@ class SatNOGSClient:
                 station_id,
                 future=True,
                 cursor=cursor,
-                force=force and page_number == 0,
+                force=force,
             )
             results.extend(page["results"])
             if progress:
