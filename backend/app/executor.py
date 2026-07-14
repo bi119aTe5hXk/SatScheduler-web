@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 from app.db import Database
@@ -26,7 +28,12 @@ class ScheduleExecutor:
         passes: list[PredictedPass],
         settings: SchedulerSettings,
         trigger_type: str,
+        progress: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict:
+        async def report(stage: str, message: str, **details: Any) -> None:
+            if progress:
+                await progress(stage, message, details)
+
         run_id = str(uuid4())
         now = datetime.now(timezone.utc).isoformat()
         with self.database.connection() as connection:
@@ -49,8 +56,17 @@ class ScheduleExecutor:
             )
 
         results: list[dict] = []
-        for offset in range(0, len(passes), settings.batch_size):
+        total_batches = max(1, (len(passes) + settings.batch_size - 1) // settings.batch_size)
+        for batch_index, offset in enumerate(
+            range(0, len(passes), settings.batch_size), start=1
+        ):
             batch = passes[offset : offset + settings.batch_size]
+            await report(
+                "submitting",
+                f"Submitting batch {batch_index}/{total_batches} ({len(batch)} observations)",
+                current=batch_index,
+                total=total_batches,
+            )
             payload = [
                 self.client.serialize_observation(
                     station.station_id, item.transmitter_uuid, item.start, item.end
@@ -69,7 +85,13 @@ class ScheduleExecutor:
                     for item in batch:
                         results.append(self._record_failure(run_id, item, str(batch_error), settings, 1))
                     continue
-                for item, request in zip(batch, payload):
+                for retry_index, (item, request) in enumerate(zip(batch, payload), start=1):
+                    await report(
+                        "retrying",
+                        f"Retrying failed batch individually: {retry_index}/{len(batch)}",
+                        current=retry_index,
+                        total=len(batch),
+                    )
                     try:
                         created = await self.client.create_observations([request])
                         observation = created[0] if created else {}
@@ -114,4 +136,3 @@ class ScheduleExecutor:
                 ),
             )
         return {"id": item_id, "target_id": str(item.target_id), "status": status, "observation_id": observation_id, "error": error}
-

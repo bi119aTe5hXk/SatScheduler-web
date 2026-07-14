@@ -9,3 +9,12 @@ def test_import_payload_is_a_json_request_body():
     assert {
         parameter["name"] for parameter in operation.get("parameters", [])
     } == {"replace"}
+
+
+def test_background_plan_and_schedule_status_routes_are_exposed():
+    paths = app.openapi()["paths"]
+
+    assert "get" in paths["/api/plans/status"]
+    assert "post" in paths["/api/plans/start"]
+    assert "get" in paths["/api/schedules/status"]
+    assert "post" in paths["/api/schedules/start"]

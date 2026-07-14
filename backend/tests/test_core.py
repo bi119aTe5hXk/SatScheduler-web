@@ -280,6 +280,28 @@ def test_satellite_limit_is_applied_after_sorting():
     assert skipped[0]["reason"] == "satellite_run_limit"
 
 
+def test_conflicting_target_does_not_consume_satellite_limit():
+    first = make_target(0, "Conflicting")
+    second = make_target(1, "Available")
+    first_pass = make_pass(first, 80)
+    second_pass = make_pass(second, 70)
+    second_pass.start += timedelta(minutes=20)
+    second_pass.peak += timedelta(minutes=20)
+    second_pass.end += timedelta(minutes=20)
+    observation = {
+        "id": 123,
+        "start": first_pass.start.isoformat(),
+        "end": first_pass.end.isoformat(),
+    }
+
+    selected, skipped = select_non_conflicting(
+        [first_pass, second_pass], [observation], 0, 1, 1
+    )
+
+    assert [item.target_id for item in selected] == [second.id]
+    assert any(item["reason"] == "conflict" for item in skipped)
+
+
 def test_transmitter_insights_combine_stats_and_recent_recommendation():
     transmitters = [
         {"uuid": "tx-b", "description": "B"},

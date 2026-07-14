@@ -203,16 +203,47 @@ function TransmitterStatsBar({ transmitter }: { transmitter: TransmitterInsight 
 }
 
 function Schedule({ settings, targets, onNotify }: { settings: Settings; targets: Target[]; onNotify: Notify }) {
-  const [plan, setPlan] = useState<any>(null), [loading, setLoading] = useState(false), [result, setResult] = useState<any>(null)
-  const build = async () => { setLoading(true); try { const value: any = await api('/plans', { method: 'POST', body: JSON.stringify({}) }); setPlan(value); onNotify(`Plan calculated: ${value.selected?.length || 0} passes selected.`, 'success') } catch (e) { onNotify(String(e), 'error') } finally { setLoading(false) } }
-  const showScheduleResult = (value: any) => { setResult(value); if (value.success_count) delete observationViewCache.upcoming; const message = `Scheduling finished: ${value.success_count || 0} succeeded, ${value.failure_count || 0} failed.`; onNotify(message, value.failure_count ? 'error' : 'success') }
-  const submit = async () => { if (!plan?.selected?.length || !confirm(`Submit ${plan.selected.length} observations?`)) return; setLoading(true); try { showScheduleResult(await api('/schedules', { method: 'POST', body: JSON.stringify({ passes: plan.selected, trigger_type: 'manual' }) })) } catch (e) { onNotify(String(e), 'error') } finally { setLoading(false) } }
-  const submitOne = async (item: Pass) => { if (!confirm(`Schedule ${item.satellite_name} at ${formatUtc(item.start)}?`)) return; setLoading(true); try { showScheduleResult(await api('/schedules', { method: 'POST', body: JSON.stringify({ passes: [item], trigger_type: 'manual-single' }) })) } catch (e) { onNotify(String(e), 'error') } finally { setLoading(false) } }
-  return <div className="page"><PageHeader eyebrow="PLANNING DESK" title="Build an observation plan" action={<button className="primary" disabled={loading || !targets.length} onClick={build}>{loading ? 'Calculating…' : 'Calculate passes'}</button>} />
+  const [plan, setPlan] = useState<any>(null), [planJob, setPlanJob] = useState<any>({ status: 'idle' }), [scheduleJob, setScheduleJob] = useState<any>({ status: 'idle' }), [result, setResult] = useState<any>(null)
+  const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null)
+  const updateJobs = async () => {
+    try {
+      const [nextPlanJob, nextScheduleJob] = await Promise.all([api<any>('/plans/status'), api<any>('/schedules/status')])
+      setPlanJob(nextPlanJob); setScheduleJob(nextScheduleJob)
+      if (nextPlanJob.status === 'completed' && nextPlanJob.result) {
+        setPlan(nextPlanJob.result)
+        if (activePlanJob.current === nextPlanJob.job_id) { onNotify(`Plan calculated: ${nextPlanJob.result.selected?.length || 0} passes selected.`, 'success'); activePlanJob.current = null }
+      } else if (nextPlanJob.status === 'failed' && activePlanJob.current === nextPlanJob.job_id) { onNotify(`Plan calculation failed: ${nextPlanJob.message}`, 'error'); activePlanJob.current = null }
+      if (nextScheduleJob.status === 'completed' && nextScheduleJob.result) {
+        setResult(nextScheduleJob.result)
+        if (nextScheduleJob.result.success_count) delete observationViewCache.upcoming
+        if (activeScheduleJob.current === nextScheduleJob.job_id) { onNotify(`Scheduling finished: ${nextScheduleJob.result.success_count || 0} succeeded, ${nextScheduleJob.result.failure_count || 0} failed.`, nextScheduleJob.result.failure_count ? 'error' : 'success'); activeScheduleJob.current = null }
+      } else if (nextScheduleJob.status === 'failed' && activeScheduleJob.current === nextScheduleJob.job_id) { onNotify(`Scheduling failed: ${nextScheduleJob.message}`, 'error'); activeScheduleJob.current = null }
+    } catch (error) { onNotify(`Cannot read background task status: ${String(error)}`, 'error') }
+  }
+  useEffect(() => { void updateJobs() }, [])
+  useEffect(() => {
+    if (planJob.status !== 'running' && scheduleJob.status !== 'running') return
+    const timer = window.setInterval(() => void updateJobs(), 1000)
+    return () => window.clearInterval(timer)
+  }, [planJob.status, scheduleJob.status])
+  const build = async () => { try { const job: any = await api('/plans/start?force=true', { method: 'POST', body: JSON.stringify({}) }); activePlanJob.current = job.job_id; setPlanJob(job); onNotify('Plan calculation started in the background.', 'info') } catch (error) { onNotify(String(error), 'error') } }
+  const startSchedule = async (passes: Pass[], triggerType: string) => { try { const job: any = await api('/schedules/start', { method: 'POST', body: JSON.stringify({ passes, trigger_type: triggerType }) }); activeScheduleJob.current = job.job_id; setScheduleJob(job); onNotify('Observation submission started in the background.', 'info') } catch (error) { onNotify(String(error), 'error') } }
+  const submit = async () => { if (!plan?.selected?.length) { onNotify('No passes were selected. Review the skipped-reason summary below.', 'error'); return } if (confirm(`Submit ${plan.selected.length} observations?`)) await startSchedule(plan.selected, 'manual') }
+  const submitOne = async (item: Pass) => { if (confirm(`Schedule ${item.satellite_name} at ${formatUtc(item.start)}?`)) await startSchedule([item], 'manual-single') }
+  const loading = planJob.status === 'running', submitting = scheduleJob.status === 'running'
+  const skipReasons = useMemo(() => Object.entries((plan?.skipped || []).reduce((counts: Record<string, number>, item: any) => { const reason = item.reason || 'unknown'; counts[reason] = (counts[reason] || 0) + 1; return counts }, {})).sort((a: any, b: any) => b[1] - a[1]), [plan])
+  return <div className="page"><PageHeader eyebrow="PLANNING DESK" title="Build an observation plan" action={<button className="primary" disabled={loading || submitting || !targets.length} onClick={build}>{loading ? 'Calculating…' : 'Recalculate passes'}</button>} />
     <section className="hero-grid"><Metric label="Engine" value={settings.prediction_engine === 'satnogs_predict' ? 'SatNOGS' : 'Skyfield'} detail={settings.comparison_enabled ? 'Comparison enabled' : 'Primary only'} /><Metric label="Sort mode" value={settings.sort_mode.replaceAll('_', ' ')} detail="Configured in Settings" /><Metric label="Planning horizon" value={`${settings.horizon_hours}H`} detail={`Maximum ${settings.passes_per_satellite} pass / satellite`} /><Metric label="Enabled targets" value={String(targets.filter(t => t.enabled).length)} detail={`Limit ${settings.satellites_per_run} per run`} /></section>
-    {!plan && <div className="panel empty">Calculate a preview before submitting observations.</div>}{plan && <div className="panel"><div className="panel-title"><div><small>{formatUtc(plan.start)} → {formatUtc(plan.end)}</small><h2>{plan.selected.length} selected / {plan.candidates.length} candidates</h2></div><button className="primary" onClick={submit}>Submit selected</button></div><div className="pass-list">{plan.selected.map((item: Pass) => <div className="pass-row" key={`${item.target_id}-${item.start}`}><div><strong>{item.satellite_name}</strong><small>{item.engine.replace('_', ' ')}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 1000)} sec</small></div><div><strong>{item.peak_elevation.toFixed(1)}° peak</strong><small>Az {item.rise_azimuth.toFixed(0)}° → {item.set_azimuth.toFixed(0)}°</small></div><button className="ghost" disabled={loading} onClick={() => submitOne(item)}>Schedule one</button></div>)}</div></div>}
-    {result && <div className={`result ${result.failure_count ? 'warning' : 'success'}`}>Run {result.status}: {result.success_count} scheduled, {result.failure_count} failed.</div>}
+    {loading && <JobProgress job={planJob} label="PLAN CALCULATION" />}{submitting && <JobProgress job={scheduleJob} label="OBSERVATION SUBMISSION" />}
+    {!plan && !loading && <div className="panel empty">No cached plan is available. Calculate a preview before submitting observations.</div>}{plan && <div className="panel"><div className="panel-title"><div><small>{formatUtc(plan.start)} → {formatUtc(plan.end)}{planJob.cached ? ' · cached result' : ''}</small><h2>{plan.selected.length} selected / {plan.candidates.length} candidates</h2></div><button className="primary" disabled={!plan.selected.length || submitting} onClick={submit}>{submitting ? 'Submitting…' : 'Submit selected'}</button></div>{!plan.selected.length && <div className="result warning">No non-conflicting passes were selected. The reasons below explain why.</div>}<div className="skip-summary">{skipReasons.slice(0, 8).map(([reason, count]: any) => <span key={reason}><strong>{count}</strong>{String(reason).replaceAll('_', ' ')}</span>)}</div><div className="pass-list">{plan.selected.map((item: Pass) => <div className="pass-row" key={`${item.target_id}-${item.start}`}><div><strong>{item.satellite_name}</strong><small>{item.engine.replace('_', ' ')}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 1000)} sec</small></div><div><strong>{item.peak_elevation.toFixed(1)}° peak</strong><small>Az {item.rise_azimuth.toFixed(0)}° → {item.set_azimuth.toFixed(0)}°</small></div><button className="ghost" disabled={submitting} onClick={() => submitOne(item)}>Schedule one</button></div>)}</div></div>}
+    {result && <div className={`panel schedule-result ${result.failure_count ? 'warning' : 'success'}`}><div className="panel-title"><div><small>LAST SUBMISSION RESULT</small><h2>Run {result.status}: {result.success_count} scheduled, {result.failure_count} failed</h2></div><span className="muted">{result.run_id}</span></div><div className="schedule-result-list">{(result.results || []).map((item: any) => <div key={item.id}><strong>{item.status === 'success' ? `Observation #${item.observation_id || 'created'}` : 'Failed'}</strong><small>{item.error || item.target_id}</small></div>)}</div></div>}
   </div>
+}
+
+function JobProgress({ job, label }: { job: any; label: string }) {
+  const progress = job.progress || {}, current = progress.current ?? progress.page, total = progress.total
+  const percentage = current && total ? Math.min(100, (current / total) * 100) : null
+  return <section className="panel job-progress"><div className="job-progress-heading"><span className="spinner" /><div><small>{label} · {String(job.stage || 'working').replaceAll('_', ' ')}</small><strong>{job.message || 'Working in the background…'}</strong></div>{current != null && <span>{current}{total ? ` / ${total}` : ''}</span>}</div><div className={`job-progress-bar ${percentage == null ? 'indeterminate' : ''}`}><span style={percentage == null ? undefined : { width: `${percentage}%` }} /></div>{progress.records != null && <small>{progress.records} records loaded</small>}<p>Safe to leave this page. The task continues on the server.</p></section>
 }
 
 function ObservationList({ future, title, onNotify }: { future: boolean; title: string; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {

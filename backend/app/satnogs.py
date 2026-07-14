@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -298,7 +298,11 @@ class SatNOGSClient:
         return payload
 
     async def all_future_observations(
-        self, station_id: int, max_pages: int = 20, force: bool = False
+        self,
+        station_id: int,
+        max_pages: int = 20,
+        force: bool = False,
+        progress: Callable[[int, int], Awaitable[None]] | None = None,
     ) -> list[dict[str, Any]]:
         cursor: str | None = None
         results: list[dict[str, Any]] = []
@@ -311,6 +315,8 @@ class SatNOGSClient:
                 force=force and page_number == 0,
             )
             results.extend(page["results"])
+            if progress:
+                await progress(page_number + 1, len(results))
             cursor = page.get("next_cursor")
             if not cursor or cursor in seen:
                 break

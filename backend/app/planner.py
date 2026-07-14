@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -19,6 +20,9 @@ from app.schemas import (
 from app.satnogs import SatNOGSClient
 from app.solar import solar_elevation
 from app.targets import TargetRepository
+
+
+ProgressCallback = Callable[[str, str, dict[str, Any]], Awaitable[None]]
 
 
 def _parse_remote_datetime(value: str | None) -> datetime | None:
@@ -110,13 +114,11 @@ def select_non_conflicting(
     admitted_targets: set[UUID] = set()
     buffer = timedelta(seconds=buffer_seconds)
     for item in candidates:
-        if item.target_id not in admitted_targets:
-            if len(admitted_targets) >= satellites_per_run:
-                skipped.append(
-                    {"pass": item.model_dump(mode="json"), "reason": "satellite_run_limit"}
-                )
-                continue
-            admitted_targets.add(item.target_id)
+        if item.target_id not in admitted_targets and len(admitted_targets) >= satellites_per_run:
+            skipped.append(
+                {"pass": item.model_dump(mode="json"), "reason": "satellite_run_limit"}
+            )
+            continue
         if count_by_target.get(item.target_id, 0) >= passes_per_satellite:
             skipped.append({"pass": item.model_dump(mode="json"), "reason": "per_satellite_limit"})
             continue
@@ -129,6 +131,7 @@ def select_non_conflicting(
             skipped.append({"pass": item.model_dump(mode="json"), "reason": "conflict", "with": conflict})
             continue
         selected.append(item)
+        admitted_targets.add(item.target_id)
         occupied.append((start, end, f"selected:{item.target_id}"))
         count_by_target[item.target_id] = count_by_target.get(item.target_id, 0) + 1
     return selected, skipped
@@ -150,7 +153,13 @@ class Planner:
         sort_mode: SortMode | None = None,
         comparison_enabled: bool | None = None,
         target_ids: list[UUID] | None = None,
+        progress: ProgressCallback | None = None,
     ) -> PlanResult:
+        async def report(stage: str, message: str, **details: Any) -> None:
+            if progress:
+                await progress(stage, message, details)
+
+        await report("preparing", "Preparing enabled satellite targets")
         now = datetime.now(timezone.utc)
         start = start or now + timedelta(minutes=settings.lead_minutes)
         if start.tzinfo is None:
@@ -188,7 +197,15 @@ class Planner:
                 else:
                     scored_targets.append(target)
             targets = scored_targets
-        tle_payload, _ = await self.client.tles([target.sat_id for target in targets])
+        await report("tle", f"Fetching TLE data for {len(targets)} satellites", total=len(targets))
+        tle_payload, tle_cache = await self.client.tles([target.sat_id for target in targets])
+        await report(
+            "tle",
+            f"Loaded {len(tle_payload)} TLE records",
+            total=len(targets),
+            records=len(tle_payload),
+            cached=bool(tle_cache.get("fresh")),
+        )
         tle_by_sat: dict[str, TLE] = {}
         for raw in tle_payload:
             try:
@@ -208,7 +225,13 @@ class Planner:
         secondary_engine = engine_for(secondary_name) if compare else None
         candidates: list[PredictedPass] = []
         comparisons: list[dict[str, Any]] = []
-        for target in targets:
+        for target_index, target in enumerate(targets, start=1):
+            await report(
+                "prediction",
+                f"Calculating orbit {target_index}/{len(targets)}: {target.satellite_name or target.name}",
+                current=target_index,
+                total=len(targets),
+            )
             tle = tle_by_sat.get(target.sat_id)
             if not tle:
                 skipped.append({"target_id": str(target.id), "reason": "missing_tle"})
@@ -228,8 +251,22 @@ class Planner:
                 comparisons.extend(compare_passes(filtered, secondary))
 
         targets_by_id = {target.id: target for target in targets}
+        await report("ranking", f"Ranking {len(candidates)} candidate passes", records=len(candidates))
         ordered = sort_passes(candidates, targets_by_id, sort_mode)
-        observations = await self.client.all_future_observations(station.station_id)
+
+        async def observation_progress(page: int, records: int) -> None:
+            await report(
+                "observations",
+                f"Fetching station reservations: page {page}, {records} records",
+                page=page,
+                records=records,
+            )
+
+        await report("observations", "Fetching existing station reservations")
+        observations = await self.client.all_future_observations(
+            station.station_id, progress=observation_progress
+        )
+        await report("selection", "Selecting non-conflicting passes")
         selected, conflict_skips = select_non_conflicting(
             ordered,
             observations,

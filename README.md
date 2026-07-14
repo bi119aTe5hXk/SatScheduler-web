@@ -19,6 +19,9 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Four scheduling modes: list priority, list priority plus elevation, elevation only, and
   SatNOGS default priority scoring.
 - Manual plan preview with single-pass or batch submission and per-observation fallback after batch failure.
+- Server-side background plan/submission jobs with live TLE, orbit-prediction, Observation-page,
+  ranking, selection, batch and retry progress.
+- One-hour persistent plan-result cache; leaving the Schedule page does not cancel active work.
 - Daily station-local-time or fixed-hour automatic execution, limited to a 48-hour horizon.
 - Overview card for the next observation with live listening state/countdowns, transmitter details,
   pass geometry and a polar plot.
@@ -77,6 +80,12 @@ Reception pages use a persistent one-hour TTL in SQLite. The web UI also keeps s
 Observation lists for one hour so reopening a page does not make another backend request. A manual
 refresh bypasses both cache layers. Observation details and their artifact URLs remain uncached.
 Successful scheduling invalidates upcoming Observation pages immediately.
+
+The latest completed planning result is stored for one hour. Opening Schedule restores that result
+without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation
+and submission status remain on the server, so changing pages does not cancel either operation.
+The UI polls only local status endpoints and shows skipped-reason counts plus per-observation
+submission results.
 
 All outbound SatNOGS DB and Network requests share one global start-rate limiter. The interval is
 configured in Settings under `API request interval seconds` (0.5–30 seconds, default 4); changing

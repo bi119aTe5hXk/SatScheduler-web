@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -56,6 +58,118 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="SatScheduler Web", version="0.1.0", lifespan=lifespan)
+
+PLAN_CACHE_KEY = "latest_plan_result"
+SCHEDULE_CACHE_KEY = "latest_schedule_result"
+plan_job: dict[str, Any] = {"status": "idle"}
+schedule_job: dict[str, Any] = {"status": "idle"}
+plan_task: asyncio.Task | None = None
+schedule_task: asyncio.Task | None = None
+
+
+def _cached_job(key: str, ttl: timedelta = timedelta(hours=1)) -> dict[str, Any] | None:
+    cached = database.get_setting(key)
+    if not isinstance(cached, dict) or not cached.get("completed_at"):
+        return None
+    completed_at = datetime.fromisoformat(str(cached["completed_at"]).replace("Z", "+00:00"))
+    if completed_at < datetime.now(timezone.utc) - ttl:
+        return None
+    return {"status": "completed", "cached": True, **cached}
+
+
+def _job_snapshot(job: dict[str, Any], cache_key: str) -> dict[str, Any]:
+    if job.get("status") in {"running", "failed"}:
+        return job
+    if job.get("status") == "completed":
+        completed_at = datetime.fromisoformat(
+            str(job["completed_at"]).replace("Z", "+00:00")
+        )
+        return job if completed_at >= datetime.now(timezone.utc) - timedelta(hours=1) else {"status": "idle"}
+    return _cached_job(cache_key) or job
+
+
+async def _run_plan_job(job_id: str, request: PlanRequest) -> None:
+    global plan_job
+
+    async def progress(stage: str, message: str, details: dict[str, Any]) -> None:
+        global plan_job
+        plan_job = {
+            **plan_job,
+            "status": "running",
+            "stage": stage,
+            "message": message,
+            "progress": details,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    try:
+        await progress("station", "Loading ground-station configuration", {})
+        station = await resolve_station(database, client)
+        settings = get_scheduler_settings(database)
+        result = await planner.make_plan(
+            station,
+            settings,
+            start=request.start,
+            horizon_hours=request.horizon_hours,
+            engine_name=request.engine,
+            sort_mode=request.sort_mode,
+            comparison_enabled=request.comparison_enabled,
+            target_ids=request.target_ids,
+            progress=progress,
+        )
+        completed_at = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "job_id": job_id,
+            "completed_at": completed_at,
+            "result": result.model_dump(mode="json"),
+        }
+        database.set_setting(PLAN_CACHE_KEY, payload)
+        plan_job = {"status": "completed", "cached": False, **payload}
+    except Exception as exc:
+        plan_job = {
+            "job_id": job_id,
+            "status": "failed",
+            "stage": "failed",
+            "message": str(exc),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+async def _run_schedule_job(job_id: str, request: ScheduleRequest) -> None:
+    global schedule_job
+
+    async def progress(stage: str, message: str, details: dict[str, Any]) -> None:
+        global schedule_job
+        schedule_job = {
+            **schedule_job,
+            "status": "running",
+            "stage": stage,
+            "message": message,
+            "progress": details,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    try:
+        station = await resolve_station(database, client)
+        result = await executor.execute(
+            station,
+            request.passes,
+            get_scheduler_settings(database),
+            request.trigger_type,
+            progress=progress,
+        )
+        completed_at = datetime.now(timezone.utc).isoformat()
+        payload = {"job_id": job_id, "completed_at": completed_at, "result": result}
+        database.set_setting(SCHEDULE_CACHE_KEY, payload)
+        schedule_job = {"status": "completed", "cached": False, **payload}
+    except Exception as exc:
+        schedule_job = {
+            "job_id": job_id,
+            "status": "failed",
+            "stage": "failed",
+            "message": str(exc),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 @app.get("/api/health")
@@ -178,6 +292,33 @@ async def plans_create(request: PlanRequest):
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.get("/api/plans/status")
+async def plans_status():
+    return _job_snapshot(plan_job, PLAN_CACHE_KEY)
+
+
+@app.post("/api/plans/start", status_code=202)
+async def plans_start(request: PlanRequest, force: bool = True):
+    global plan_job, plan_task
+    if plan_task and not plan_task.done():
+        return plan_job
+    if not force:
+        cached = _cached_job(PLAN_CACHE_KEY)
+        if cached:
+            return cached
+    job_id = str(uuid4())
+    plan_job = {
+        "job_id": job_id,
+        "status": "running",
+        "stage": "queued",
+        "message": "Plan calculation queued",
+        "progress": {},
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    plan_task = asyncio.create_task(_run_plan_job(job_id, request))
+    return plan_job
+
+
 @app.post("/api/schedules")
 async def schedules_create(request: ScheduleRequest):
     station = await resolve_station(database, client)
@@ -187,6 +328,29 @@ async def schedules_create(request: ScheduleRequest):
         get_scheduler_settings(database),
         request.trigger_type,
     )
+
+
+@app.get("/api/schedules/status")
+async def schedules_status():
+    return _job_snapshot(schedule_job, SCHEDULE_CACHE_KEY)
+
+
+@app.post("/api/schedules/start", status_code=202)
+async def schedules_start(request: ScheduleRequest):
+    global schedule_job, schedule_task
+    if schedule_task and not schedule_task.done():
+        return schedule_job
+    job_id = str(uuid4())
+    schedule_job = {
+        "job_id": job_id,
+        "status": "running",
+        "stage": "queued",
+        "message": "Observation submission queued",
+        "progress": {},
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    schedule_task = asyncio.create_task(_run_schedule_job(job_id, request))
+    return schedule_job
 
 
 @app.post("/api/schedules/run-automatic")
