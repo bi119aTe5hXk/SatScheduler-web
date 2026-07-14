@@ -5,7 +5,7 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 
 ## Current features
 
-- Ordered watch list with drag-equivalent up/down priority controls.
+- Ordered watch list with drag-and-drop, up/down controls, and multi-select move-to-top.
 - Searchable satellite picker matching name, aliases, SatNOGS ID and NORAD ID, with a visible
   catalog loading state and a 100-row render limit.
 - Satellite and transmitter selection from SatNOGS DB.
@@ -21,7 +21,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Four scheduling modes: list priority, list priority plus elevation, elevation only, and
   SatNOGS default priority scoring.
 - Manual plan preview that selects every non-conflicting pass, supports removing/reordering the
-  review list, and requires confirmation before batch submission.
+  review list, displays compact AOS/MAX/LOS Polar Plots, and requires confirmation before batch
+  submission.
 - iOS-compatible conflict handling: the configurable safety buffer applies around existing
   SatNOGS Observations, while candidates selected in the same plan use their actual pass times.
 - A combined station/planning/submission timeline and live per-observation states. Submission can
