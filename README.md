@@ -15,15 +15,18 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Batched TLE retrieval for all enabled targets.
 - SatNOGS Predict and direct Skyfield/SGP4 prediction engines.
 - Optional prediction comparison without duplicate scheduling.
-- Minimum horizon, minimum/maximum culmination, wrapped azimuth and station-daylight filters.
+- Minimum 180-second observation duration, minimum horizon, minimum/maximum culmination, wrapped
+  azimuth and station-daylight filters.
 - Four scheduling modes: list priority, list priority plus elevation, elevation only, and
   SatNOGS default priority scoring.
 - Manual plan preview that selects every non-conflicting pass, supports removing/reordering the
   review list, and requires confirmation before batch submission.
 - iOS-compatible conflict handling: the configurable safety buffer applies around existing
   SatNOGS Observations, while candidates selected in the same plan use their actual pass times.
-- Live per-observation submission states (waiting, scheduling, scheduled or failed with the API
-  error) plus per-observation fallback after a batch failure.
+- A combined station/planning/submission timeline and live per-observation states. Submission can
+  be stopped after the current request; successful rows are cleared while failed rows remain.
+- Configurable API batch size and shared HTTP-only request spacing. All batches are attempted before
+  observations from failed batches are retried individually.
 - Server-side background plan/submission jobs with live TLE, orbit-prediction, Observation-page,
   ranking, selection, batch and retry progress.
 - One-hour persistent plan-result cache; leaving the Schedule page does not cancel active work.

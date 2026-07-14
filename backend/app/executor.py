@@ -29,6 +29,7 @@ class ScheduleExecutor:
         settings: SchedulerSettings,
         trigger_type: str,
         progress: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict:
         async def report(stage: str, message: str, **details: Any) -> None:
             if progress:
@@ -82,17 +83,21 @@ class ScheduleExecutor:
             )
 
         results: list[dict] = []
-        total_batches = max(1, (len(passes) + settings.batch_size - 1) // settings.batch_size)
+        batch_size = settings.satellites_per_run
+        total_batches = max(1, (len(passes) + batch_size - 1) // batch_size)
+        failed_batches: list[tuple[list[PredictedPass], list[dict[str, Any]], str]] = []
+        canceled = False
         await report_items(
             "queued",
             f"{len(passes)} observations waiting to be submitted",
             current=0,
             total=len(passes),
         )
-        for batch_index, offset in enumerate(
-            range(0, len(passes), settings.batch_size), start=1
-        ):
-            batch = passes[offset : offset + settings.batch_size]
+        for batch_index, offset in enumerate(range(0, len(passes), batch_size), start=1):
+            if should_cancel and should_cancel():
+                canceled = True
+                break
+            batch = passes[offset : offset + batch_size]
             for item in batch:
                 states_by_key[pass_key(item)]["status"] = "scheduling"
             await report_items(
@@ -113,7 +118,6 @@ class ScheduleExecutor:
                     observation = created[index] if index < len(created) else {}
                     result = self._record_result(run_id, item, "success", observation.get("id"), None, 1)
                     results.append(result)
-                    self.targets.record_success(item.target_id)
                     state = states_by_key[pass_key(item)]
                     state.update(
                         status="scheduled",
@@ -127,11 +131,24 @@ class ScheduleExecutor:
                     total=len(passes),
                 )
             except Exception as batch_error:
-                if not settings.retry_individually:
+                message = str(batch_error)
+                if settings.retry_individually:
                     for item in batch:
-                        results.append(self._record_failure(run_id, item, str(batch_error), settings, 1))
                         states_by_key[pass_key(item)].update(
-                            status="failed", error=str(batch_error)
+                            status="retry_waiting", error=message
+                        )
+                    failed_batches.append((batch, payload, message))
+                    await report_items(
+                        "submitting",
+                        f"Batch {batch_index}/{total_batches} failed; queued for individual retry after all batches",
+                        current=offset + len(batch),
+                        total=len(passes),
+                    )
+                else:
+                    for item in batch:
+                        results.append(self._record_failure(run_id, item, message, 1))
+                        states_by_key[pass_key(item)].update(
+                            status="failed", error=message
                         )
                     await report_items(
                         "submitting",
@@ -139,43 +156,57 @@ class ScheduleExecutor:
                         current=offset + len(batch),
                         total=len(passes),
                     )
-                    continue
-                for item in batch:
-                    states_by_key[pass_key(item)]["status"] = "waiting"
-                for retry_index, (item, request) in enumerate(zip(batch, payload), start=1):
-                    state = states_by_key[pass_key(item)]
-                    state["status"] = "scheduling"
-                    await report_items(
-                        "retrying",
-                        f"Retrying {item.satellite_name} individually ({retry_index}/{len(batch)})",
-                        current=offset + retry_index - 1,
-                        total=len(passes),
-                    )
-                    try:
-                        created = await self.client.create_observations([request])
-                        observation = created[0] if created else {}
-                        results.append(
-                            self._record_result(run_id, item, "success", observation.get("id"), None, 2)
-                        )
-                        self.targets.record_success(item.target_id)
-                        state.update(
-                            status="scheduled",
-                            observation_id=observation.get("id"),
-                            error=None,
-                        )
-                    except Exception as exc:
-                        results.append(self._record_failure(run_id, item, str(exc), settings, 2))
-                        state.update(status="failed", error=str(exc))
-                    await report_items(
-                        "retrying",
-                        f"Individual retry {retry_index}/{len(batch)} finished",
-                        current=offset + retry_index,
-                        total=len(passes),
-                    )
+        retry_items = [
+            (item, request, batch_error)
+            for batch, payload, batch_error in failed_batches
+            for item, request in zip(batch, payload)
+        ]
+        for retry_index, (item, request, _batch_error) in enumerate(retry_items, start=1):
+            if should_cancel and should_cancel():
+                canceled = True
+                break
+            state = states_by_key[pass_key(item)]
+            state["status"] = "scheduling"
+            await report_items(
+                "retrying",
+                f"Retrying {item.satellite_name} individually ({retry_index}/{len(retry_items)})",
+                current=retry_index - 1,
+                total=len(retry_items),
+            )
+            try:
+                created = await self.client.create_observations([request])
+                observation = created[0] if created else {}
+                results.append(
+                    self._record_result(run_id, item, "success", observation.get("id"), None, 2)
+                )
+                state.update(
+                    status="scheduled",
+                    observation_id=observation.get("id"),
+                    error=None,
+                )
+            except Exception as exc:
+                results.append(self._record_failure(run_id, item, str(exc), 2))
+                state.update(status="failed", error=str(exc))
+            await report_items(
+                "retrying",
+                f"Individual retry {retry_index}/{len(retry_items)} finished",
+                current=retry_index,
+                total=len(retry_items),
+            )
 
         successes = sum(result["status"] == "success" for result in results)
         failures = len(results) - successes
-        status = "completed" if failures == 0 else "partial" if successes else "failed"
+        pending = sum(
+            item["status"] not in {"scheduled", "failed"} for item in item_states
+        )
+        status = "canceled" if canceled else "completed" if failures == 0 else "partial" if successes else "failed"
+        if canceled:
+            await report_items(
+                "canceled",
+                "Submission stopped by user; unsubmitted observations remain available",
+                current=successes + failures,
+                total=len(passes),
+            )
         with self.database.connection() as connection:
             connection.execute(
                 """
@@ -190,12 +221,12 @@ class ScheduleExecutor:
             "status": status,
             "success_count": successes,
             "failure_count": failures,
+            "pending_count": pending,
             "results": results,
             "items": item_states,
         }
 
-    def _record_failure(self, run_id, item, message, settings, attempts):
-        self.targets.record_failure(item.target_id, message, settings.problem_threshold)
+    def _record_failure(self, run_id, item, message, attempts):
         return self._record_result(run_id, item, "failure", None, message, attempts)
 
     def _record_result(self, run_id, item, status, observation_id, error, attempts):

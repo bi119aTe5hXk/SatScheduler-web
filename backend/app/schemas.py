@@ -83,11 +83,9 @@ class SchedulerSettings(BaseModel):
     interval_hours: int = Field(default=6, ge=1, le=48)
     horizon_hours: float = Field(default=48, gt=0, le=48)
     lead_minutes: int = Field(default=10, ge=1, le=180)
-    satellites_per_run: int = Field(default=30, ge=1, le=30)
-    batch_size: int = Field(default=20, ge=1, le=50)
+    satellites_per_run: int = Field(default=15, ge=1, le=50)
     api_request_interval_seconds: float = Field(default=4.0, ge=0.5, le=30)
     retry_individually: bool = True
-    problem_threshold: int = Field(default=3, ge=1, le=20)
     conflict_buffer_seconds: int = Field(default=300, ge=0, le=3600)
 
     @field_validator("daily_time_local")

@@ -186,6 +186,21 @@ def test_wrapped_azimuth_and_station_daylight_filter():
     assert pass_allowed(item, target, station)[0]
 
 
+def test_passes_shorter_than_satnogs_minimum_are_rejected():
+    target = make_target(0, "Short pass")
+    item = make_pass(target, 50)
+    item.end = item.start + timedelta(seconds=179)
+    station = StationConfig(
+        station_id=1,
+        latitude=35,
+        longitude=139,
+        altitude_m=10,
+        timezone="Asia/Tokyo",
+    )
+
+    assert pass_allowed(item, target, station) == (False, "below_minimum_duration")
+
+
 def test_ios_watch_list_import_and_export(database: Database):
     repository = TargetRepository(database)
     database.set_setting("station_config", {"station_id": 4856, "timezone": "Asia/Tokyo"})
@@ -270,17 +285,21 @@ def test_ios_watch_list_import_and_export(database: Database):
     assert [target.name for target in repository.list()] == ["ISS"]
 
 
-def test_satellite_limit_is_applied_after_sorting():
+def test_all_non_conflicting_satellites_are_kept_after_sorting():
     first = make_target(0, "First")
     second = make_target(1, "Second")
+    first_pass = make_pass(first, 10)
+    first_pass.start += timedelta(minutes=20)
+    first_pass.peak += timedelta(minutes=20)
+    first_pass.end += timedelta(minutes=20)
     ordered = sort_passes(
-        [make_pass(first, 10), make_pass(second, 80)],
+        [first_pass, make_pass(second, 80)],
         {first.id: first, second.id: second},
         SortMode.BEST_ELEVATION,
     )
-    selected, skipped = select_non_conflicting(ordered, [], 0, 1)
-    assert [item.target_id for item in selected] == [second.id]
-    assert skipped[0]["reason"] == "satellite_run_limit"
+    selected, skipped = select_non_conflicting(ordered, [], 0)
+    assert [item.target_id for item in selected] == [second.id, first.id]
+    assert skipped == []
 
 
 def test_conflicting_target_does_not_consume_satellite_limit():
@@ -297,9 +316,7 @@ def test_conflicting_target_does_not_consume_satellite_limit():
         "end": first_pass.end.isoformat(),
     }
 
-    selected, skipped = select_non_conflicting(
-        [first_pass, second_pass], [observation], 0, 1
-    )
+    selected, skipped = select_non_conflicting([first_pass, second_pass], [observation], 0)
 
     assert [item.target_id for item in selected] == [second.id]
     assert any(item["reason"] == "conflict" for item in skipped)
@@ -313,7 +330,7 @@ def test_all_non_conflicting_passes_for_an_admitted_satellite_are_selected():
     second.peak += timedelta(minutes=20)
     second.end += timedelta(minutes=20)
 
-    selected, skipped = select_non_conflicting([first, second], [], 0, 1)
+    selected, skipped = select_non_conflicting([first, second], [], 0)
 
     assert selected == [first, second]
     assert skipped == []
@@ -327,7 +344,7 @@ def test_conflict_buffer_applies_to_existing_observations_but_not_selected_passe
     second.peak += timedelta(minutes=11)
     second.end += timedelta(minutes=11)
 
-    selected, skipped = select_non_conflicting([first, second], [], 300, 1)
+    selected, skipped = select_non_conflicting([first, second], [], 300)
 
     assert selected == [first, second]
     assert skipped == []
@@ -337,7 +354,7 @@ def test_conflict_buffer_applies_to_existing_observations_but_not_selected_passe
         "start": (first.end + timedelta(minutes=1)).isoformat(),
         "end": (first.end + timedelta(minutes=6)).isoformat(),
     }
-    selected, skipped = select_non_conflicting([first], [existing], 300, 1)
+    selected, skipped = select_non_conflicting([first], [existing], 300)
 
     assert selected == []
     assert skipped[0]["with"] == "observation:789"
@@ -402,7 +419,7 @@ async def test_schedule_progress_reports_each_item_state(database: Database):
             timezone="Asia/Tokyo",
         ),
         [item],
-        SchedulerSettings(batch_size=1),
+        SchedulerSettings(satellites_per_run=1),
         "manual",
         progress=progress,
     )
@@ -410,6 +427,65 @@ async def test_schedule_progress_reports_each_item_state(database: Database):
     statuses = [update[2]["items"][0]["status"] for update in updates]
     assert statuses == ["waiting", "scheduling", "scheduled"]
     assert result["items"][0]["observation_id"] == 456
+
+
+@pytest.mark.asyncio
+async def test_failed_batches_are_retried_only_after_all_batch_requests(database: Database):
+    target = make_target(0, "Batch satellite")
+    passes = []
+    for index in range(4):
+        item = make_pass(target, 70 - index)
+        item.start += timedelta(minutes=index * 20)
+        item.peak += timedelta(minutes=index * 20)
+        item.end += timedelta(minutes=index * 20)
+        passes.append(item)
+
+    class FakeCache:
+        @staticmethod
+        def expire(_prefix):
+            return 1
+
+    class FakeClient:
+        cache = FakeCache()
+
+        def __init__(self):
+            self.call_sizes = []
+
+        @staticmethod
+        def serialize_observation(station_id, transmitter_uuid, start, end):
+            return {
+                "ground_station": station_id,
+                "transmitter": transmitter_uuid,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            }
+
+        async def create_observations(self, payload):
+            self.call_sizes.append(len(payload))
+            call = len(self.call_sizes)
+            if call in {1, 4}:
+                raise ValueError(f"request {call} failed")
+            return [{"id": call * 100 + index} for index in range(len(payload))]
+
+    client = FakeClient()
+    executor = ScheduleExecutor(database, client, object())
+    result = await executor.execute(
+        StationConfig(
+            station_id=1,
+            latitude=35,
+            longitude=139,
+            altitude_m=10,
+            timezone="Asia/Tokyo",
+        ),
+        passes,
+        SchedulerSettings(satellites_per_run=2, retry_individually=True),
+        "manual",
+    )
+
+    assert client.call_sizes == [2, 2, 1, 1]
+    assert result["success_count"] == 3
+    assert result["failure_count"] == 1
+    assert [item["status"] for item in result["items"]].count("failed") == 1
 
 
 def test_transmitter_insights_combine_stats_and_recent_recommendation():

@@ -23,6 +23,7 @@ from app.targets import TargetRepository
 
 
 ProgressCallback = Callable[[str, str, dict[str, Any]], Awaitable[None]]
+MINIMUM_OBSERVATION_SECONDS = 180
 
 
 def _parse_remote_datetime(value: str | None) -> datetime | None:
@@ -45,6 +46,8 @@ def _azimuth_in_range(value: float, minimum: float, maximum: float) -> bool:
 
 
 def pass_allowed(item: PredictedPass, target: WatchTarget, station: StationConfig) -> tuple[bool, str | None]:
+    if (item.end - item.start).total_seconds() < MINIMUM_OBSERVATION_SECONDS:
+        return False, "below_minimum_duration"
     if target.min_peak_elevation is not None and item.peak_elevation < target.min_peak_elevation:
         return False, "below_minimum_peak_elevation"
     if target.max_peak_elevation is not None and item.peak_elevation > target.max_peak_elevation:
@@ -99,7 +102,6 @@ def select_non_conflicting(
     candidates: list[PredictedPass],
     observations: list[dict[str, Any]],
     buffer_seconds: int,
-    satellites_per_run: int,
 ) -> tuple[list[PredictedPass], list[dict[str, Any]]]:
     existing_intervals: list[tuple[datetime, datetime, str]] = []
     for observation in observations:
@@ -112,14 +114,8 @@ def select_non_conflicting(
     selected_intervals: list[tuple[datetime, datetime, str]] = []
     selected: list[PredictedPass] = []
     skipped: list[dict[str, Any]] = []
-    admitted_targets: set[UUID] = set()
     buffer = timedelta(seconds=buffer_seconds)
     for item in candidates:
-        if item.target_id not in admitted_targets and len(admitted_targets) >= satellites_per_run:
-            skipped.append(
-                {"pass": item.model_dump(mode="json"), "reason": "satellite_run_limit"}
-            )
-            continue
         buffered_start, buffered_end = item.start - buffer, item.end + buffer
         conflict = next(
             (
@@ -142,7 +138,6 @@ def select_non_conflicting(
             skipped.append({"pass": item.model_dump(mode="json"), "reason": "conflict", "with": conflict})
             continue
         selected.append(item)
-        admitted_targets.add(item.target_id)
         selected_intervals.append((item.start, item.end, f"selected:{item.target_id}"))
     return selected, skipped
 
@@ -186,7 +181,6 @@ class Planner:
             target
             for target in self.targets.list()
             if target.enabled
-            and target.health_status != "problem"
             and (not allowed_ids or target.id in allowed_ids)
         ]
         skipped: list[dict[str, Any]] = []
@@ -238,7 +232,7 @@ class Planner:
         for target_index, target in enumerate(targets, start=1):
             await report(
                 "prediction",
-                f"Calculating orbit {target_index}/{len(targets)}: {target.satellite_name or target.name}",
+                f"Local orbit calculation {target_index}/{len(targets)} (no API delay): {target.satellite_name or target.name}",
                 current=target_index,
                 total=len(targets),
             )
@@ -281,7 +275,6 @@ class Planner:
             ordered,
             observations,
             settings.conflict_buffer_seconds,
-            settings.satellites_per_run,
         )
         skipped.extend(conflict_skips)
         return PlanResult(

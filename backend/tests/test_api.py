@@ -18,3 +18,4 @@ def test_background_plan_and_schedule_status_routes_are_exposed():
     assert "post" in paths["/api/plans/start"]
     assert "get" in paths["/api/schedules/status"]
     assert "post" in paths["/api/schedules/start"]
+    assert "post" in paths["/api/schedules/cancel"]

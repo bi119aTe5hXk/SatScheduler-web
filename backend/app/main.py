@@ -65,6 +65,7 @@ plan_job: dict[str, Any] = {"status": "idle"}
 schedule_job: dict[str, Any] = {"status": "idle"}
 plan_task: asyncio.Task | None = None
 schedule_task: asyncio.Task | None = None
+schedule_cancel_requested = False
 
 
 def _cached_job(key: str, ttl: timedelta = timedelta(hours=1)) -> dict[str, Any] | None:
@@ -136,7 +137,7 @@ async def _run_plan_job(job_id: str, request: PlanRequest) -> None:
 
 
 async def _run_schedule_job(job_id: str, request: ScheduleRequest) -> None:
-    global schedule_job
+    global schedule_job, schedule_cancel_requested
 
     async def progress(stage: str, message: str, details: dict[str, Any]) -> None:
         global schedule_job
@@ -159,6 +160,7 @@ async def _run_schedule_job(job_id: str, request: ScheduleRequest) -> None:
             get_scheduler_settings(database),
             request.trigger_type,
             progress=progress,
+            should_cancel=lambda: schedule_cancel_requested,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
         payload = {
@@ -353,10 +355,11 @@ async def schedules_status():
 
 @app.post("/api/schedules/start", status_code=202)
 async def schedules_start(request: ScheduleRequest):
-    global schedule_job, schedule_task
+    global schedule_job, schedule_task, schedule_cancel_requested
     if schedule_task and not schedule_task.done():
         return schedule_job
     job_id = str(uuid4())
+    schedule_cancel_requested = False
     item_states = [
         {
             "key": f"{item.target_id}:{item.start.isoformat()}",
@@ -380,6 +383,21 @@ async def schedules_start(request: ScheduleRequest):
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     schedule_task = asyncio.create_task(_run_schedule_job(job_id, request))
+    return schedule_job
+
+
+@app.post("/api/schedules/cancel", status_code=202)
+async def schedules_cancel():
+    global schedule_job, schedule_cancel_requested
+    if not schedule_task or schedule_task.done():
+        raise HTTPException(409, "no observation submission is running")
+    schedule_cancel_requested = True
+    schedule_job = {
+        **schedule_job,
+        "stage": "canceling",
+        "message": "Stop requested; waiting for the current API request to finish",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
     return schedule_job
 
 
