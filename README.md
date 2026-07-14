@@ -11,7 +11,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Satellite and transmitter selection from SatNOGS DB.
 - Transmitter selection enriched with cached SatNOGS Network good/unknown/bad statistics,
   a three-color ratio bar and an iOS-compatible recommendation from the latest two good-observation
-  pages.
+  pages. The DB transmitter list renders first; Network evidence loads non-blockingly so a rate
+  limit cannot prevent selecting or saving a target.
 - Batched TLE retrieval for all enabled targets.
 - SatNOGS Predict and direct Skyfield/SGP4 prediction engines.
 - Optional prediction comparison without duplicate scheduling.

@@ -267,12 +267,46 @@ function Targets({ targets, onChanged, onNotify }: { targets: Target[]; onChange
 
 function TargetEditor({ value, onClose, onSaved, onNotify }: { value?: Target; onClose: () => void; onSaved: () => void; onNotify: Notify }) {
   const [satellites, setSatellites] = useState<any[]>([]), [loadingSatellites, setLoadingSatellites] = useState(true), [satelliteSearch, setSatelliteSearch] = useState(value?.satellite_name || value?.name || '')
-  const [transmitters, setTransmitters] = useState<TransmitterInsight[]>([]), [loadingTransmitters, setLoadingTransmitters] = useState(false)
+  const [transmitters, setTransmitters] = useState<TransmitterInsight[]>([]), [loadingTransmitters, setLoadingTransmitters] = useState(false), [loadingInsights, setLoadingInsights] = useState(false), [insightError, setInsightError] = useState('')
+  const transmitterRequest = useRef(0)
   const [form, setForm] = useState<any>(value || { name: '', sat_id: '', transmitter_uuid: '', priority: 1, enabled: true, requires_station_daylight: false, daylight_solar_elevation: -6 })
   const loadSatellites = async (force = false) => { if (!force && freshClientCache(satelliteCatalogCache)) { setSatellites(satelliteCatalogCache.results); setLoadingSatellites(false); return } setLoadingSatellites(true); try { const value = await api<any>(`/satellites${force ? '?force=true' : ''}`); const results = value.results || []; satelliteCatalogCache = { results, expiresAt: Date.now() + CLIENT_CACHE_TTL }; setSatellites(results); if (force) onNotify(`Satellite catalog updated: ${results.length} records.`, 'success') } catch (error) { onNotify(`Satellite catalog update failed: ${String(error)}`, 'error') } finally { setLoadingSatellites(false) } }
   useEffect(() => { void loadSatellites(false) }, [])
-  const loadTransmitters = async (force = false) => { if (!form.sat_id) return; setLoadingTransmitters(true); try { const value = await api<any>(`/satellites/${form.sat_id}/transmitter-insights${force ? '?force=true' : ''}`); setTransmitters(value.results || []); if (force) onNotify('Transmitter statistics updated.', 'success') } catch (e) { onNotify(String(e), 'error'); setTransmitters([]) } finally { setLoadingTransmitters(false) } }
-  useEffect(() => { setTransmitters([]); loadTransmitters() }, [form.sat_id])
+  const loadInsights = async (satId: string, requestId: number, force = false) => {
+    setLoadingInsights(true); setInsightError('')
+    try {
+      const value = await api<any>(`/satellites/${satId}/transmitter-insights${force ? '?force=true' : ''}`)
+      if (transmitterRequest.current !== requestId) return
+      setTransmitters(value.results || [])
+      if (force) onNotify('Transmitter statistics updated.', 'success')
+    } catch (error) {
+      if (transmitterRequest.current !== requestId) return
+      setInsightError(`Network statistics unavailable: ${String(error)}`)
+      if (force) onNotify(`Transmitter statistics update failed: ${String(error)}`, 'error')
+    } finally { if (transmitterRequest.current === requestId) setLoadingInsights(false) }
+  }
+  const loadTransmitters = async (satId: string, requestId: number) => {
+    setLoadingTransmitters(true); setInsightError('')
+    try {
+      const value = await api<any>(`/satellites/${satId}/transmitters`)
+      if (transmitterRequest.current !== requestId) return
+      const matching = (value.results || []).filter((item: any) => !item.sat_id || item.sat_id === satId)
+      const active = matching.filter((item: any) => item.status === 'active'), available = active.length ? active : matching
+      setTransmitters(available.map((item: any) => ({ ...item, network_stats: undefined, stats_max_good_count: 0, recent_good_count: 0, recommended: available.length === 1 })))
+      setLoadingTransmitters(false)
+      void loadInsights(satId, requestId)
+    } catch (error) {
+      if (transmitterRequest.current !== requestId) return
+      setTransmitters([]); setLoadingTransmitters(false)
+      onNotify(`Transmitter list update failed: ${String(error)}`, 'error')
+    }
+  }
+  useEffect(() => {
+    const requestId = ++transmitterRequest.current
+    setTransmitters([]); setInsightError(''); setLoadingInsights(false)
+    if (form.sat_id) void loadTransmitters(form.sat_id, requestId)
+    return () => { if (transmitterRequest.current === requestId) transmitterRequest.current += 1 }
+  }, [form.sat_id])
   const aliases = (satellite: any) => Array.isArray(satellite.names) ? satellite.names.join(', ') : satellite.names || satellite.aliases || satellite.alternative_names || ''
   const filteredSatellites = useMemo(() => { const keyword = satelliteSearch.trim().toLocaleLowerCase(); if (!keyword) return satellites; return satellites.filter(satellite => [satellite.sat_id, satellite.norad_cat_id, satellite.name, aliases(satellite)].some(value => String(value ?? '').toLocaleLowerCase().includes(keyword))) }, [satellites, satelliteSearch])
   const selectSatellite = (satellite: any) => { setSatelliteSearch(satellite.name || aliases(satellite) || satellite.sat_id); setForm({ ...form, sat_id: satellite.sat_id, transmitter_uuid: '', transmitter_success_rate: null, transmitter_good_count: null, transmitter_max_good_count: null }) }
@@ -281,15 +315,15 @@ function TargetEditor({ value, onClose, onSaved, onNotify }: { value?: Target; o
   return <div className="modal-backdrop"><div className="modal"><div className="panel-title"><div><small>WATCH TARGET</small><h2>{value ? 'Edit satellite' : 'Add satellite'}</h2></div><button className="ghost" onClick={onClose}>Close</button></div>
     <section className="satellite-picker"><div className="picker-title"><label>Search satellites<input value={satelliteSearch} onChange={e => setSatelliteSearch(e.target.value)} placeholder="Name, alias, SatNOGS ID or NORAD ID" /></label><button className="ghost" disabled={loadingSatellites} onClick={() => loadSatellites(true)}>Refresh catalog</button></div>{form.sat_id && <div className="selected-satellite"><span>Selected: <strong>{satellites.find(s => s.sat_id === form.sat_id)?.name || form.satellite_name || form.name}</strong></span><button className="ghost" onClick={() => { setSatelliteSearch(''); setForm({ ...form, sat_id: '', transmitter_uuid: '' }); setTransmitters([]) }}>Clear</button></div>}{loadingSatellites ? <div className="catalog-loading"><span className="spinner" /> Loading satellite catalog…</div> : <><div className="satellite-results">{filteredSatellites.slice(0, 100).map(satellite => <button className={form.sat_id === satellite.sat_id ? 'selected' : ''} key={satellite.sat_id} onClick={() => selectSatellite(satellite)}><div><strong>{satellite.name || aliases(satellite) || satellite.sat_id}</strong><small>NORAD {satellite.norad_cat_id || '—'} · {satellite.sat_id}</small>{aliases(satellite) && <small>Aliases: {aliases(satellite)}</small>}</div>{form.sat_id === satellite.sat_id && <span>Selected</span>}</button>)}</div>{!filteredSatellites.length && <div className="catalog-loading">No satellites match “{satelliteSearch}”.</div>}{filteredSatellites.length > 100 && <div className="catalog-limit">Showing first 100 of {filteredSatellites.length}; refine the search to narrow the list.</div>}</>}</section>
     <div className="form-grid"><label>Minimum horizon °<input type="number" value={form.min_elevation ?? ''} onChange={e => number('min_elevation', e.target.value)} /></label><label>Minimum peak °<input type="number" value={form.min_peak_elevation ?? ''} onChange={e => number('min_peak_elevation', e.target.value)} /></label><label>Maximum peak °<input type="number" value={form.max_peak_elevation ?? ''} onChange={e => number('max_peak_elevation', e.target.value)} /></label><label>Azimuth from °<input type="number" value={form.min_azimuth ?? ''} onChange={e => number('min_azimuth', e.target.value)} /></label><label>Azimuth to °<input type="number" value={form.max_azimuth ?? ''} onChange={e => number('max_azimuth', e.target.value)} /></label></div>
-    {form.sat_id && <section className="transmitter-picker"><div className="picker-title"><div><small>TRANSMITTER EVIDENCE</small><strong>Select a transmitter</strong></div><button className="ghost" disabled={loadingTransmitters} onClick={() => loadTransmitters(true)}>Refresh stats</button></div>{loadingTransmitters && <div className="picker-loading">Loading Network statistics and two recent good-observation pages…</div>}{!loadingTransmitters && !transmitters.length && <div className="picker-loading">No active transmitters found.</div>}{transmitters.map(tx => <button className={`transmitter-choice ${form.transmitter_uuid === tx.uuid ? 'selected' : ''}`} key={tx.uuid} onClick={() => setForm({ ...form, transmitter_uuid: tx.uuid })}><div className="tx-heading"><div><strong>{tx.description || tx.mode || tx.uuid}</strong><small>{tx.mode || 'Unknown mode'} · {frequency(tx.downlink_low)}</small></div>{tx.recommended && <span className="recommended">Recommended{transmitters.length > 1 ? ` · ${tx.recent_good_count} recent good` : ''}</span>}</div><TransmitterStatsBar transmitter={tx} /></button>)}</section>}
+    {form.sat_id && <section className="transmitter-picker"><div className="picker-title"><div><small>TRANSMITTER EVIDENCE</small><strong>Select a transmitter</strong></div><button className="ghost" disabled={loadingTransmitters || loadingInsights || !transmitters.length} onClick={() => loadInsights(form.sat_id, transmitterRequest.current, true)}>Refresh stats</button></div>{loadingTransmitters && <div className="picker-loading"><span className="spinner" /> Loading transmitter list…</div>}{!loadingTransmitters && loadingInsights && <div className="picker-loading nonblocking"><span className="spinner" /> Transmitter list ready · loading Network statistics and two recent good-observation pages in the background…</div>}{!loadingTransmitters && insightError && <div className="picker-loading insight-warning">{insightError} · You can still select and save a transmitter.</div>}{!loadingTransmitters && !transmitters.length && <div className="picker-loading">No active transmitters found.</div>}{transmitters.map(tx => <button className={`transmitter-choice ${form.transmitter_uuid === tx.uuid ? 'selected' : ''}`} key={tx.uuid} onClick={() => setForm({ ...form, transmitter_uuid: tx.uuid })}><div className="tx-heading"><div><strong>{tx.description || tx.mode || tx.uuid}</strong><small>{tx.mode || 'Unknown mode'} · {frequency(tx.downlink_low)}</small></div>{tx.recommended && <span className="recommended">Recommended{transmitters.length > 1 ? ` · ${tx.recent_good_count} recent good` : ''}</span>}</div><TransmitterStatsBar transmitter={tx} loading={loadingInsights} /></button>)}</section>}
     <label className="check"><input type="checkbox" checked={form.requires_station_daylight} onChange={e => setForm({ ...form, requires_station_daylight: e.target.checked })} /> Only schedule when the station is in daylight</label>
     <div className="modal-actions"><button className="ghost" onClick={onClose}>Cancel</button><button className="primary" disabled={!form.sat_id || !form.transmitter_uuid} onClick={() => save().catch(e => onNotify(String(e), 'error'))}>Save target</button></div>
   </div></div>
 }
 
-function TransmitterStatsBar({ transmitter }: { transmitter: TransmitterInsight }) {
+function TransmitterStatsBar({ transmitter, loading = false }: { transmitter: TransmitterInsight; loading?: boolean }) {
   const stats = transmitter.network_stats
-  if (!stats) return <div className="stats-missing">Network statistics unavailable · SatNOG default cannot score this transmitter</div>
+  if (!stats) return <div className="stats-missing">{loading ? 'Statistics loading in the background…' : 'Network statistics unavailable · selection remains available'}</div>
   const good = stats.good_count || 0, bad = stats.bad_count || 0, unknown = (stats.unknown_count || 0) + (stats.future_count || 0), total = Math.max(1, good + bad + unknown)
   const pct = (value: number) => `${(value / total) * 100}%`
   return <div className="tx-stats"><div className="ratio-bar" title={`Bad ${bad} · Unknown/future ${unknown} · Good ${good}`}><span className="ratio-bad" style={{ width: pct(bad) }} /><span className="ratio-unknown" style={{ width: pct(unknown) }} /><span className="ratio-good" style={{ width: pct(good) }} /></div><div className="ratio-legend"><span className="bad">Bad {stats.bad_rate}%</span><span className="unknown">Unknown {Math.round((unknown / total) * 100)}%</span><span className="good">Good {stats.success_rate}%</span><span>{stats.good_count.toLocaleString()} valid receptions</span></div></div>
