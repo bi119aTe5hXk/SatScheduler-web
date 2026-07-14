@@ -88,7 +88,9 @@ Satellite catalogs, per-satellite transmitters, batched TLEs, station details, U
 Reception pages use a persistent one-hour TTL in SQLite. The web UI also keeps satellite and
 Observation lists for one hour so reopening a page does not make another backend request. A manual
 refresh bypasses both cache layers. Observation details and their artifact URLs remain uncached.
-Successful scheduling invalidates upcoming Observation pages immediately.
+Upcoming and Reception summaries also persist in browser storage and use stale-while-revalidate:
+expired data remains visible while a background refresh runs. Successful scheduling is merged into
+both the server's existing Upcoming cache and the browser cache immediately instead of clearing it.
 
 The latest completed planning result is stored for one hour. Opening Schedule restores that result
 without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation

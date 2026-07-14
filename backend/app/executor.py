@@ -215,7 +215,7 @@ class ScheduleExecutor:
                 """,
                 (status, datetime.now(timezone.utc).isoformat(), successes, failures, run_id),
             )
-        self.client.cache.expire(f"observations:{station.station_id}:1")
+        self._merge_upcoming_cache(station, passes, item_states)
         return {
             "run_id": run_id,
             "status": status,
@@ -225,6 +225,62 @@ class ScheduleExecutor:
             "results": results,
             "items": item_states,
         }
+
+    def _merge_upcoming_cache(
+        self,
+        station: StationConfig,
+        passes: list[PredictedPass],
+        item_states: list[dict[str, Any]],
+    ) -> None:
+        cache = getattr(self.client, "cache", None)
+        if not cache or not hasattr(cache, "get_entry") or not hasattr(cache, "replace_payload"):
+            return
+        key = f"observations:{station.station_id}:1:first"
+        entry = cache.get_entry(key)
+        if not entry or not isinstance(entry.get("payload"), dict):
+            return
+        passes_by_key = {
+            f"{item.target_id}:{item.start.isoformat()}": item for item in passes
+        }
+        additions = []
+        for state in item_states:
+            if state.get("status") != "scheduled" or not state.get("observation_id"):
+                continue
+            item = passes_by_key.get(state["key"])
+            additions.append(
+                {
+                    "id": state["observation_id"],
+                    "ground_station": station.station_id,
+                    "satellite_name": state.get("satellite_name"),
+                    "sat_id": item.sat_id if item else None,
+                    "transmitter_uuid": item.transmitter_uuid if item else None,
+                    "start": state.get("start"),
+                    "end": state.get("end"),
+                    "max_altitude": item.peak_elevation if item else None,
+                    "rise_azimuth": item.rise_azimuth if item else None,
+                    "set_azimuth": item.set_azimuth if item else None,
+                    "status": "future",
+                }
+            )
+        if not additions:
+            return
+        payload = dict(entry["payload"])
+        by_id = {
+            str(item.get("id")): item
+            for item in payload.get("results", [])
+            if item.get("id") is not None
+        }
+        for item in additions:
+            by_id[str(item["id"])] = {**by_id.get(str(item["id"]), {}), **item}
+        def start_time(value: dict[str, Any]) -> datetime:
+            raw = value.get("start")
+            try:
+                return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                return datetime.max.replace(tzinfo=timezone.utc)
+
+        payload["results"] = sorted(by_id.values(), key=start_time)
+        cache.replace_payload(key, payload)
 
     def _record_failure(self, run_id, item, message, attempts):
         return self._record_result(run_id, item, "failure", None, message, attempts)

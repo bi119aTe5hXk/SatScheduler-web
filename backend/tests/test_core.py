@@ -488,6 +488,50 @@ async def test_failed_batches_are_retried_only_after_all_batch_requests(database
     assert [item["status"] for item in result["items"]].count("failed") == 1
 
 
+def test_successful_schedule_is_merged_into_existing_upcoming_cache(database: Database):
+    cache = PersistentCache(database)
+    cache.set_entry(
+        "observations:1:1:first",
+        "observations",
+        {"results": [{"id": 10, "start": "2026-07-13T00:00:00Z"}], "next_cursor": "next"},
+        timedelta(hours=1),
+    )
+    expires_at = cache.get_entry("observations:1:1:first")["expires_at"]
+    target = make_target(0, "Cached satellite")
+    item = make_pass(target, 70)
+
+    class FakeClient:
+        pass
+
+    client = FakeClient()
+    client.cache = cache
+    executor = ScheduleExecutor(database, client, object())
+    executor._merge_upcoming_cache(
+        StationConfig(
+            station_id=1,
+            latitude=35,
+            longitude=139,
+            altitude_m=10,
+            timezone="Asia/Tokyo",
+        ),
+        [item],
+        [
+            {
+                "key": f"{item.target_id}:{item.start.isoformat()}",
+                "satellite_name": item.satellite_name,
+                "start": item.start.isoformat(),
+                "end": item.end.isoformat(),
+                "status": "scheduled",
+                "observation_id": 20,
+            }
+        ],
+    )
+
+    updated = cache.get_entry("observations:1:1:first")
+    assert {value["id"] for value in updated["payload"]["results"]} == {10, 20}
+    assert updated["expires_at"] == expires_at
+
+
 def test_transmitter_insights_combine_stats_and_recent_recommendation():
     transmitters = [
         {"uuid": "tx-b", "description": "B"},

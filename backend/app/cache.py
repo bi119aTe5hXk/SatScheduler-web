@@ -64,6 +64,15 @@ class PersistentCache:
                 ),
             )
 
+    def replace_payload(self, key: str, payload: Any) -> bool:
+        """Replace cached data without extending its freshness window."""
+        with self.database.connection() as connection:
+            cursor = connection.execute(
+                "UPDATE cache_entries SET payload = ? WHERE cache_key = ?",
+                (json.dumps(payload, separators=(",", ":")), key),
+            )
+        return cursor.rowcount > 0
+
     def expire(self, prefix: str | None = None) -> int:
         with self.database.connection() as connection:
             if prefix:
@@ -108,4 +117,3 @@ class PersistentCache:
                     entry["fresh"] = False
                     return entry["payload"], entry
                 raise
-

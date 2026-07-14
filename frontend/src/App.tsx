@@ -23,7 +23,26 @@ const defaultSettings: Settings = {
 
 const CLIENT_CACHE_TTL = 60 * 60 * 1000
 let satelliteCatalogCache: { results: any[]; expiresAt: number } | null = null
-const observationViewCache: Partial<Record<'upcoming' | 'receptions', { items: Observation[]; cursor: string | null; pages: number; expiresAt: number }>> = {}
+type ObservationCacheEntry = { items: Observation[]; cursor: string | null; pages: number; expiresAt: number; updatedAt?: number }
+const OBSERVATION_CACHE_KEY = 'satscheduler-observation-cache-v1'
+const observationViewCache: Partial<Record<'upcoming' | 'receptions', ObservationCacheEntry>> = (() => {
+  try { return JSON.parse(localStorage.getItem(OBSERVATION_CACHE_KEY) || '{}') } catch { return {} }
+})()
+
+function saveObservationCache(kind: 'upcoming' | 'receptions', entry: ObservationCacheEntry) {
+  observationViewCache[kind] = { ...entry, updatedAt: Date.now() }
+  try { localStorage.setItem(OBSERVATION_CACHE_KEY, JSON.stringify(observationViewCache)) } catch { /* storage may be unavailable */ }
+}
+
+function mergeUpcomingCache(additions: Observation[]): Observation[] {
+  const previous = observationViewCache.upcoming
+  const byId = new Map<number, Observation>()
+  for (const item of previous?.items || []) byId.set(item.id, item)
+  for (const item of additions) byId.set(item.id, { ...byId.get(item.id), ...item })
+  const items = [...byId.values()].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+  saveObservationCache('upcoming', { items, cursor: previous?.cursor || null, pages: previous?.pages || 1, expiresAt: previous?.expiresAt ?? Date.now() + CLIENT_CACHE_TTL })
+  return items
+}
 
 function freshClientCache<T extends { expiresAt: number }>(entry?: T | null): entry is T {
   return Boolean(entry && entry.expiresAt > Date.now())
@@ -86,8 +105,18 @@ function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string
 
 function Dashboard({ config, targets, onNavigate }: { config: any; targets: Target[]; onNavigate: (p: Page) => void }) {
   const now = useClock()
-  const [upcoming, setUpcoming] = useState<Observation[]>([])
-  useEffect(() => { api<any>('/observations/overview').then(value => setUpcoming(value.results || [])).catch(() => {}) }, [])
+  const [upcoming, setUpcoming] = useState<Observation[]>(observationViewCache.upcoming?.items || [])
+  const [refreshing, setRefreshing] = useState(false)
+  useEffect(() => {
+    const cached = observationViewCache.upcoming
+    if (freshClientCache(cached)) return
+    setRefreshing(true)
+    api<any>('/observations/overview').then(value => {
+      const items = value.results || []
+      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
+      setUpcoming(items)
+    }).catch(() => {}).finally(() => setRefreshing(false))
+  }, [])
   const next = useMemo(() => [...upcoming].filter(item => new Date(item.end || item.start || 0).getTime() > now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [upcoming, now])
   return <div className="page">
     <PageHeader eyebrow="GROUND CONTROL / SINGLE STATION" title="Observation overview" action={<button className="primary" onClick={() => onNavigate('schedule')}>Build schedule</button>} />
@@ -97,11 +126,11 @@ function Dashboard({ config, targets, onNavigate }: { config: any; targets: Targ
       <Metric label="Upcoming" value={String(upcoming.length)} detail="Loaded first page" />
       <Metric label="Next automatic run" value={config?.automatic_job?.enabled ? 'ARMED' : 'OFF'} detail={formatUtc(config?.automatic_job?.next_run_at)} />
     </section>
-    <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Station timeline</h2></div><button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div>
+    <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW{refreshing ? ' · updating in background' : ''}</small><h2>Station timeline</h2></div><button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div>
       <Timeline observations={upcoming} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
-      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><dl className="observation-facts"><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd>#{next.id}</dd></dl></div><PolarPlot observation={next} /></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
+      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations')}>#{next.id} →</button></dd></dl></div><PolarPlot observation={next} now={now} /></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
     </section>
     <section className="split">
       <div className="panel"><div className="panel-title"><h2>Watch list health</h2></div>{targets.slice(0, 6).map(target => <div className="row" key={target.id}><span className={`health ${target.health_status}`} /> <strong>{target.satellite_name || target.name}</strong><span className="muted">{target.health_status}</span></div>)}</div>
@@ -137,14 +166,27 @@ function listeningStatus(item: Observation, now: Date): { label: string; classNa
   return { label: item.status || 'Finished', className: item.status === 'good' ? 'good' : 'finished' }
 }
 
-function PolarPlot({ observation }: { observation: Observation }) {
+function observationProgress(item: Observation, now: Date): number {
+  const start = new Date(item.start || 0).getTime(), end = new Date(item.end || 0).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0
+  return Math.max(0, Math.min(1, (now.getTime() - start) / (end - start)))
+}
+
+function ObservationProgress({ observation, now }: { observation: Observation; now: Date }) {
+  const progress = observationProgress(observation, now), live = listeningStatus(observation, now).className === 'live'
+  return <div className={`observation-progress ${live ? 'live' : ''}`}><div><small>{live ? 'RECEPTION PROGRESS' : 'OBSERVATION WINDOW'}</small><span>{live ? `${Math.round(progress * 100)}%` : observationDuration(observation)}</span></div><div className="observation-progress-track"><span style={{ width: `${progress * 100}%` }} /></div></div>
+}
+
+function PolarPlot({ observation, now }: { observation: Observation; now?: Date }) {
   const center = 130, radius = 104
   const polar = (azimuth: number, elevation: number) => { const radians = (azimuth - 90) * Math.PI / 180, distance = radius * (1 - elevation / 90); return { x: center + distance * Math.cos(radians), y: center + distance * Math.sin(radians) } }
   const riseAzimuth = observation.rise_azimuth ?? 0, setAzimuth = observation.set_azimuth ?? 180
   const delta = ((setAzimuth - riseAzimuth + 540) % 360) - 180, peakAzimuth = (riseAzimuth + delta / 2 + 360) % 360
   const rise = polar(riseAzimuth, 0), peak = polar(peakAzimuth, observation.max_altitude ?? 0), set = polar(setAzimuth, 0)
   const control = { x: 2 * peak.x - (rise.x + set.x) / 2, y: 2 * peak.y - (rise.y + set.y) / 2 }
-  return <div className="polar-wrap"><svg className="polar-plot" viewBox="0 0 260 260" role="img" aria-label={`Polar plot from ${riseAzimuth} degrees to ${setAzimuth} degrees, peak ${observation.max_altitude ?? 0} degrees`}><circle cx={center} cy={center} r={radius} /><circle cx={center} cy={center} r={radius * 2 / 3} /><circle cx={center} cy={center} r={radius / 3} /><line x1={center} y1={center - radius} x2={center} y2={center + radius} /><line x1={center - radius} y1={center} x2={center + radius} y2={center} /><text x={center} y="13">N</text><text x="250" y={center + 4}>E</text><text x={center} y="257">S</text><text x="10" y={center + 4}>W</text><text className="elevation-label" x={center + 4} y={center - radius * 2 / 3}>30°</text><text className="elevation-label" x={center + 4} y={center - radius / 3}>60°</text><path className="polar-path" d={`M ${rise.x} ${rise.y} Q ${control.x} ${control.y} ${set.x} ${set.y}`} /><circle className="polar-point rise" cx={rise.x} cy={rise.y} r="4" /><circle className="polar-point peak" cx={peak.x} cy={peak.y} r="5" /><circle className="polar-point set" cx={set.x} cy={set.y} r="4" /></svg><div className="polar-legend"><span><i className="rise" />AOS {degrees(riseAzimuth)}</span><span><i className="peak" />MAX {degrees(observation.max_altitude)}</span><span><i className="set" />LOS {degrees(setAzimuth)}</span></div></div>
+  const progress = now ? observationProgress(observation, now) : 0, live = now && listeningStatus(observation, now).className === 'live'
+  const current = { x: (1 - progress) ** 2 * rise.x + 2 * (1 - progress) * progress * control.x + progress ** 2 * set.x, y: (1 - progress) ** 2 * rise.y + 2 * (1 - progress) * progress * control.y + progress ** 2 * set.y }
+  return <div className="polar-wrap"><svg className="polar-plot" viewBox="0 0 260 260" role="img" aria-label={`Polar plot from ${riseAzimuth} degrees to ${setAzimuth} degrees, peak ${observation.max_altitude ?? 0} degrees`}><circle cx={center} cy={center} r={radius} /><circle cx={center} cy={center} r={radius * 2 / 3} /><circle cx={center} cy={center} r={radius / 3} /><line x1={center} y1={center - radius} x2={center} y2={center + radius} /><line x1={center - radius} y1={center} x2={center + radius} y2={center} /><text x={center} y="13">N</text><text x="250" y={center + 4}>E</text><text x={center} y="257">S</text><text x="10" y={center + 4}>W</text><text className="elevation-label" x={center + 4} y={center - radius * 2 / 3}>30°</text><text className="elevation-label" x={center + 4} y={center - radius / 3}>60°</text><path className="polar-path" d={`M ${rise.x} ${rise.y} Q ${control.x} ${control.y} ${set.x} ${set.y}`} /><circle className="polar-point rise" cx={rise.x} cy={rise.y} r="4" /><circle className="polar-point peak" cx={peak.x} cy={peak.y} r="5" /><circle className="polar-point set" cx={set.x} cy={set.y} r="4" />{live && <><circle className="polar-current-pulse" cx={current.x} cy={current.y} r="10" /><circle className="polar-current" cx={current.x} cy={current.y} r="5" /></>}</svg><div className="polar-legend"><span><i className="rise" />AOS {degrees(riseAzimuth)}</span><span><i className="peak" />MAX {degrees(observation.max_altitude)}</span><span><i className="set" />LOS {degrees(setAzimuth)}</span></div></div>
 }
 
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -154,19 +196,19 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function Timeline({ observations }: { observations: Observation[] }) {
   const start = Date.now(), span = 48 * 3600_000
   return <div className="timeline"><div className="timeline-axis"><span>NOW</span><span>+12H</span><span>+24H</span><span>+36H</span><span>+48H</span></div><div className="timeline-track">
-    {observations.map(item => { const left = Math.max(0, Math.min(100, ((new Date(item.start || 0).getTime() - start) / span) * 100)); const width = Math.max(0.8, ((new Date(item.end || 0).getTime() - new Date(item.start || 0).getTime()) / span) * 100); return <span key={item.id} className="timeline-event" style={{ left: `${left}%`, width: `${width}%` }} title={`${item.satellite_name || item.norad_cat_id} · ${formatUtc(item.start)}`} /> })}
+    {observations.map(item => { const left = Math.max(0, Math.min(100, ((new Date(item.start || 0).getTime() - start) / span) * 100)); const width = Math.max(0.8, ((new Date(item.end || 0).getTime() - new Date(item.start || 0).getTime()) / span) * 100); return <span key={item.id} className="timeline-event" style={{ left: `${left}%`, width: `${width}%` }}><span className="timeline-tooltip"><strong>{observationSatellite(item)}</strong><span>{frequency(observationFrequency(item))} · {item.transmitter_mode || 'Unknown mode'}</span><span>{formatUtc(item.start)} → {formatUtc(item.end)}</span><span>{observationDuration(item)} · Observation #{item.id}</span></span></span> })}
   </div></div>
 }
 
-function ScheduleTimeline({ observations, passes, submissionItems }: { observations: Observation[]; passes: Pass[]; submissionItems: any[] }) {
+function ScheduleTimeline({ observations, passes, submissionItems, targets }: { observations: Observation[]; passes: Pass[]; submissionItems: any[]; targets: Target[] }) {
   const start = Date.now(), span = 48 * 3600_000
   const submissionByPass = new Map(submissionItems.map(item => [`${item.target_id}:${new Date(item.start).getTime()}`, item]))
   const events = [
-    ...observations.map(item => ({ key: `observation-${item.id}`, start: item.start, end: item.end, label: observationSatellite(item), state: 'booked' })),
-    ...passes.filter(item => !submissionByPass.has(`${item.target_id}:${new Date(item.start).getTime()}`)).map(item => ({ key: `plan-${item.target_id}-${item.start}`, start: item.start, end: item.end, label: item.satellite_name, state: 'planned' })),
-    ...submissionItems.map(item => ({ key: `submission-${item.key || `${item.target_id}-${item.start}`}`, start: item.start, end: item.end, label: item.satellite_name || item.target_id, state: item.status === 'scheduled' ? 'scheduled' : item.status === 'failed' ? 'failed' : item.status === 'scheduling' ? 'scheduling' : 'planned' })),
+    ...observations.map(item => ({ key: `observation-${item.id}`, start: item.start, end: item.end, label: observationSatellite(item), frequency: observationFrequency(item), mode: item.transmitter_mode, state: 'booked', id: item.id })),
+    ...passes.filter(item => !submissionByPass.has(`${item.target_id}:${new Date(item.start).getTime()}`)).map(item => { const target = targets.find(value => value.id === item.target_id); return { key: `plan-${item.target_id}-${item.start}`, start: item.start, end: item.end, label: item.satellite_name, frequency: target?.center_frequency, mode: target?.transmitter_description, state: 'planned', id: undefined } }),
+    ...submissionItems.map(item => { const target = targets.find(value => value.id === item.target_id); return { key: `submission-${item.key || `${item.target_id}-${item.start}`}`, start: item.start, end: item.end, label: item.satellite_name || target?.satellite_name || target?.name || item.target_id, frequency: target?.center_frequency, mode: target?.transmitter_description, state: item.status === 'scheduled' ? 'scheduled' : item.status === 'failed' ? 'failed' : item.status === 'scheduling' ? 'scheduling' : 'planned', id: item.observation_id } }),
   ]
-  return <div className="schedule-timeline"><div className="timeline-legend"><span className="booked">Booked</span><span className="planned">Planned</span><span className="scheduling">Scheduling</span><span className="scheduled">Success</span><span className="failed">Failed</span></div><div className="timeline"><div className="timeline-axis"><span>NOW</span><span>+12H</span><span>+24H</span><span>+36H</span><span>+48H</span></div><div className="timeline-track">{events.map(event => { const eventStart = new Date(event.start || 0).getTime(), eventEnd = new Date(event.end || 0).getTime(); if (eventEnd < start || eventStart > start + span) return null; const left = Math.max(0, Math.min(100, ((eventStart - start) / span) * 100)), width = Math.max(0.8, ((eventEnd - eventStart) / span) * 100); return <span key={event.key} className={`timeline-event ${event.state}`} style={{ left: `${left}%`, width: `${width}%` }} title={`${event.label} · ${event.state} · ${formatUtc(event.start)}`} /> })}</div></div></div>
+  return <div className="schedule-timeline"><div className="timeline-legend"><span className="booked">Booked</span><span className="planned">Planned</span><span className="scheduling">Scheduling</span><span className="scheduled">Success</span><span className="failed">Failed</span></div><div className="timeline"><div className="timeline-axis"><span>NOW</span><span>+12H</span><span>+24H</span><span>+36H</span><span>+48H</span></div><div className="timeline-track">{events.map(event => { const eventStart = new Date(event.start || 0).getTime(), eventEnd = new Date(event.end || 0).getTime(); if (eventEnd < start || eventStart > start + span) return null; const left = Math.max(0, Math.min(100, ((eventStart - start) / span) * 100)), width = Math.max(0.8, ((eventEnd - eventStart) / span) * 100); return <span key={event.key} className={`timeline-event ${event.state}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="timeline-tooltip"><strong>{event.label}</strong><span>{frequency(event.frequency)} · {event.mode || 'Unknown mode'}</span><span>{formatUtc(event.start)} → {formatUtc(event.end)}</span><span>{durationBetween(event.start, event.end)} · {event.state}{event.id ? ` · Observation #${event.id}` : ''}</span></span></span> })}</div></div></div>
 }
 
 function Targets({ targets, onChanged, onNotify }: { targets: Target[]; onChanged: () => void; onNotify: Notify }) {
@@ -214,7 +256,7 @@ function TransmitterStatsBar({ transmitter }: { transmitter: TransmitterInsight 
 
 function Schedule({ settings, targets, onNotify }: { settings: Settings; targets: Target[]; onNotify: Notify }) {
   const [plan, setPlan] = useState<any>(null), [draftPasses, setDraftPasses] = useState<Pass[]>([]), [planJob, setPlanJob] = useState<any>({ status: 'idle' }), [scheduleJob, setScheduleJob] = useState<any>({ status: 'idle' }), [result, setResult] = useState<any>(null)
-  const [stationObservations, setStationObservations] = useState<Observation[]>([]), [timelineLoading, setTimelineLoading] = useState(false)
+  const [stationObservations, setStationObservations] = useState<Observation[]>(observationViewCache.upcoming?.items || []), [timelineLoading, setTimelineLoading] = useState(false)
   const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null), loadedPlanJob = useRef<string | null>(null), processedScheduleJob = useRef<string | null>(null)
   const updateJobs = async () => {
     try {
@@ -227,11 +269,17 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
       if (nextScheduleJob.status === 'completed' && nextScheduleJob.result) {
         setResult(nextScheduleJob.result)
         if (processedScheduleJob.current !== nextScheduleJob.job_id) {
-          const keep = new Set((nextScheduleJob.result.items || []).filter((item: any) => item.status !== 'scheduled').map((item: any) => `${item.target_id}:${new Date(item.start).getTime()}`))
+          const resultItems = nextScheduleJob.result.items || []
+          const keep = new Set(resultItems.filter((item: any) => item.status !== 'scheduled').map((item: any) => `${item.target_id}:${new Date(item.start).getTime()}`))
+          const plannedByKey = new Map([...(plan?.selected || []), ...draftPasses].map((item: Pass) => [`${item.target_id}:${new Date(item.start).getTime()}`, item]))
+          const additions: Observation[] = resultItems.filter((item: any) => item.status === 'scheduled' && item.observation_id).map((item: any) => {
+            const planned = plannedByKey.get(`${item.target_id}:${new Date(item.start).getTime()}`), target = targets.find(value => value.id === item.target_id)
+            return { id: Number(item.observation_id), start: item.start, end: item.end, satellite_name: item.satellite_name || planned?.satellite_name || target?.satellite_name || target?.name, sat_id: planned?.sat_id || target?.sat_id, transmitter_uuid: planned?.transmitter_uuid || target?.transmitter_uuid, transmitter_description: target?.transmitter_description, center_frequency: target?.center_frequency, max_altitude: planned?.peak_elevation, rise_azimuth: planned?.rise_azimuth, set_azimuth: planned?.set_azimuth, status: 'future' }
+          })
+          if (additions.length) setStationObservations(mergeUpcomingCache(additions))
           setDraftPasses(current => current.filter(item => keep.has(`${item.target_id}:${new Date(item.start).getTime()}`)))
           processedScheduleJob.current = nextScheduleJob.job_id
         }
-        if (nextScheduleJob.result.success_count) delete observationViewCache.upcoming
         if (activeScheduleJob.current === nextScheduleJob.job_id) { const canceled = nextScheduleJob.result.status === 'canceled'; onNotify(canceled ? `Scheduling stopped: ${nextScheduleJob.result.success_count || 0} succeeded, ${nextScheduleJob.result.pending_count || 0} remain.` : `Scheduling finished: ${nextScheduleJob.result.success_count || 0} succeeded, ${nextScheduleJob.result.failure_count || 0} failed.`, canceled ? 'info' : nextScheduleJob.result.failure_count ? 'error' : 'success'); activeScheduleJob.current = null }
       } else if (nextScheduleJob.status === 'failed' && activeScheduleJob.current === nextScheduleJob.job_id) { onNotify(`Scheduling failed: ${nextScheduleJob.message}`, 'error'); activeScheduleJob.current = null }
     } catch (error) { onNotify(`Cannot read background task status: ${String(error)}`, 'error') }
@@ -239,12 +287,13 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
   useEffect(() => { void updateJobs() }, [])
   useEffect(() => {
     const cached = observationViewCache.upcoming
-    if (freshClientCache(cached)) { setStationObservations(cached.items); return }
+    if (cached?.items.length) setStationObservations(cached.items)
+    if (freshClientCache(cached)) return
     setTimelineLoading(true)
     api<any>('/observations/overview').then(value => {
       const items = value.results || []
       setStationObservations(items)
-      observationViewCache.upcoming = { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL }
+      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
     }).catch(error => onNotify(`Station timeline update failed: ${String(error)}`, 'error')).finally(() => setTimelineLoading(false))
   }, [])
   useEffect(() => {
@@ -264,7 +313,7 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
   return <div className="page"><PageHeader eyebrow="PLANNING DESK" title="Build an observation plan" action={<button className="primary" disabled={loading || submitting || !targets.length} onClick={build}>{loading ? 'Calculating…' : 'Recalculate passes'}</button>} />
     <section className="hero-grid"><Metric label="Engine" value={settings.prediction_engine === 'satnogs_predict' ? 'SatNOGS' : 'Skyfield'} detail={settings.comparison_enabled ? 'Comparison enabled' : 'Primary only'} /><Metric label="Sort mode" value={settings.sort_mode.replaceAll('_', ' ')} detail="Configured in Settings" /><Metric label="Planning horizon" value={`${settings.horizon_hours}H`} detail="All non-conflicting passes" /><Metric label="Enabled targets" value={String(targets.filter(t => t.enabled).length)} detail={`${settings.satellites_per_run} observations / API batch`} /></section>
     {loading && <JobProgress job={planJob} label="PLAN CALCULATION" />}{submitting && <JobProgress job={scheduleJob} label="OBSERVATION SUBMISSION" action={<button className="danger" disabled={scheduleJob.stage === 'canceling'} onClick={cancelSchedule}>{scheduleJob.stage === 'canceling' ? 'Stopping…' : 'Stop submission'}</button>} />}
-    <section className="panel schedule-timeline-panel"><div className="panel-title"><div><small>STATION + CURRENT PLAN · 48 HOURS</small><h2>Scheduling timeline</h2></div>{timelineLoading && <span className="timeline-count">Loading station reservations…</span>}</div><ScheduleTimeline observations={stationObservations} passes={draftPasses} submissionItems={submissionItems} /></section>
+    <section className="panel schedule-timeline-panel"><div className="panel-title"><div><small>STATION + CURRENT PLAN · 48 HOURS</small><h2>Scheduling timeline</h2></div>{timelineLoading && <span className="timeline-count">Updating station reservations…</span>}</div><ScheduleTimeline observations={stationObservations} passes={draftPasses} submissionItems={submissionItems} targets={targets} /></section>
     {!plan && !loading && <div className="panel empty">No cached plan is available. Calculate a preview before submitting observations.</div>}{plan && <div className="panel review-plan"><div className="panel-title"><div><small>REVIEW REQUIRED · {formatUtc(plan.start)} → {formatUtc(plan.end)}{planJob.cached ? ' · cached result' : ''}</small><h2>{draftPasses.length} ready to submit / {plan.selected.length} available</h2></div><button className="primary" disabled={!draftPasses.length || submitting || loading} onClick={submit}>{submitting ? 'Submitting…' : `Confirm and submit ${draftPasses.length}`}</button></div><p className="review-help">All non-conflicting passes are included by default. Remove unwanted passes or change their submission order before confirming.</p>{!plan.selected.length && <div className="result warning">No non-conflicting passes were selected. The reasons below explain why.</div>}<div className="skip-summary">{skipReasons.slice(0, 8).map(([reason, count]: any) => <span key={reason}><strong>{count}</strong>{String(reason).replaceAll('_', ' ')}</span>)}</div><div className="pass-list">{draftPasses.map((item: Pass, index: number) => <div className="pass-row review-row" key={`${item.target_id}-${item.start}`}><div className="pass-order"><strong>#{index + 1}</strong><span><button className="ghost" aria-label={`Move ${item.satellite_name} up`} disabled={submitting || index === 0} onClick={() => movePass(index, -1)}>↑</button><button className="ghost" aria-label={`Move ${item.satellite_name} down`} disabled={submitting || index === draftPasses.length - 1} onClick={() => movePass(index, 1)}>↓</button></span></div><div><strong>{item.satellite_name}</strong><small>{item.engine.replace('_', ' ')}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 1000)} sec</small></div><div><strong>{item.peak_elevation.toFixed(1)}° peak</strong><small>Az {item.rise_azimuth.toFixed(0)}° → {item.set_azimuth.toFixed(0)}°</small></div><button className="danger" disabled={submitting} onClick={() => removePass(index)}>Remove</button></div>)}{!draftPasses.length && plan.selected.length > 0 && <div className="empty">All passes were removed from this review list. Recalculate to restore them.</div>}</div></div>}
     {submissionItems.length > 0 && <div className={`panel schedule-result ${result?.failure_count || result?.status === 'canceled' || scheduleJob.status === 'failed' ? 'warning' : result ? 'success' : ''}`}><div className="panel-title"><div><small>{submitting ? 'LIVE SUBMISSION STATUS' : 'LAST SUBMISSION RESULT'}</small><h2>{result ? result.status === 'canceled' ? `Run canceled: ${result.success_count} scheduled, ${result.pending_count} remaining` : `Run ${result.status}: ${result.success_count} scheduled, ${result.failure_count} failed` : `${submissionItems.filter((item: any) => item.status === 'scheduled').length} / ${submissionItems.length} scheduled`}</h2></div>{result?.run_id && <span className="muted">{result.run_id}</span>}</div><div className="submission-status-list">{submissionItems.map((item: any, index: number) => <div className={`submission-status-row ${item.status}`} key={item.key || `${item.target_id}-${item.start}`}><span className="submission-index">#{index + 1}</span><div><strong>{item.satellite_name || item.target_id}</strong><small>{formatUtc(item.start)}</small></div><span className="submission-state">{item.status === 'waiting' ? 'Waiting' : item.status === 'retry_waiting' ? 'Retry queued' : item.status === 'scheduling' ? 'Scheduling…' : item.status === 'scheduled' ? `Scheduled${item.observation_id ? ` #${item.observation_id}` : ''}` : 'Failed'}</span>{item.error && <small className="submission-error">{item.error}</small>}</div>)}</div></div>}
   </div>
@@ -277,7 +326,8 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
 }
 
 function ObservationList({ future, title, onNotify }: { future: boolean; title: string; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
-  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(null)
+  const initialCache = observationViewCache[future ? 'upcoming' : 'receptions']
+  const [items, setItems] = useState<Observation[]>(initialCache?.items || []), [cursor, setCursor] = useState<string | null>(initialCache?.cursor || null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(null)
   const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
@@ -287,7 +337,7 @@ function ObservationList({ future, title, onNotify }: { future: boolean; title: 
     request.current?.abort()
     const controller = new AbortController()
     request.current = controller
-    setLoading(true); setItems([]); setCursor(null); setProgress({ page: 0, records: 0 })
+    setLoading(true); setProgress({ page: 0, records: items.length })
     const collected: Observation[] = [], seenIds = new Set<number>(), seenCursors = new Set<string>()
     let nextCursor: string | null = null, pages = 0
     try {
@@ -304,11 +354,11 @@ function ObservationList({ future, title, onNotify }: { future: boolean; title: 
         if (!nextCursor || seenCursors.has(nextCursor)) break
         seenCursors.add(nextCursor)
       }
-      observationViewCache.upcoming = { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL }
+      saveObservationCache('upcoming', { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
       onNotify(`Upcoming observations updated: ${collected.length} records from ${pages} page${pages === 1 ? '' : 's'}.`, 'success')
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
-        if (collected.length) observationViewCache.upcoming = { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL }
+        if (collected.length) saveObservationCache('upcoming', { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
         onNotify(`Upcoming observations ${collected.length ? 'partially updated' : 'update failed'} after page ${pages}: ${String(error)}`, 'error')
       }
     } finally {
@@ -325,14 +375,15 @@ function ObservationList({ future, title, onNotify }: { future: boolean; title: 
       if (force) params.set('force', 'true')
       const data = await api<any>(`/observations/receptions${params.size ? `?${params}` : ''}`)
       const nextCursor = data.next_cursor || null
-      setItems(previous => { const merged = reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))]; observationViewCache.receptions = { items: merged, cursor: nextCursor, pages: reset ? 1 : (observationViewCache.receptions?.pages || 1) + 1, expiresAt: Date.now() + CLIENT_CACHE_TTL }; return merged })
+      setItems(previous => { const merged = reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))]; saveObservationCache('receptions', { items: merged, cursor: nextCursor, pages: reset ? 1 : (observationViewCache.receptions?.pages || 1) + 1, expiresAt: Date.now() + CLIENT_CACHE_TTL }); return merged })
       setCursor(nextCursor)
       if (reset) onNotify(`Reception archive updated: ${data.results.length} records loaded.`, 'success')
     } catch (error) { onNotify(`Reception archive update failed: ${String(error)}`, 'error') }
     finally { setLoading(false) }
   }
   useEffect(() => {
-    setItems([]); setCursor(null); setSelected(null)
+    const cached = observationViewCache[future ? 'upcoming' : 'receptions']
+    setItems(cached?.items || []); setCursor(cached?.cursor || null); setSelected(null)
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
     return () => request.current?.abort()
   }, [future])
@@ -369,8 +420,12 @@ function observationMetadata(item: Observation): any {
 }
 
 function observationDuration(item: Observation): string {
-  if (!item.start || !item.end) return '—'
-  const seconds = Math.max(0, Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 1000))
+  return durationBetween(item.start, item.end)
+}
+
+function durationBetween(start?: string, end?: string): string {
+  if (!start || !end) return '—'
+  const seconds = Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000))
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
