@@ -59,7 +59,6 @@ export type Settings = {
   horizon_hours: number
   lead_minutes: number
   satellites_per_run: number
-  passes_per_satellite: number
   batch_size: number
   api_request_interval_seconds: number
   retry_individually: boolean

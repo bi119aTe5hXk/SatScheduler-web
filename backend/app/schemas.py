@@ -84,7 +84,6 @@ class SchedulerSettings(BaseModel):
     horizon_hours: float = Field(default=24, gt=0, le=48)
     lead_minutes: int = Field(default=10, ge=1, le=180)
     satellites_per_run: int = Field(default=30, ge=1, le=30)
-    passes_per_satellite: int = Field(default=1, ge=1, le=20)
     batch_size: int = Field(default=20, ge=1, le=50)
     api_request_interval_seconds: float = Field(default=4.0, ge=0.5, le=30)
     retry_individually: bool = True

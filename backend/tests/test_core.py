@@ -9,11 +9,13 @@ import pytest
 
 from app.cache import PersistentCache
 from app.db import Database
+from app.executor import ScheduleExecutor
 from app.import_export import export_configuration, import_configuration
 from app.planner import pass_allowed, select_non_conflicting, sort_passes
 from app.schemas import (
     PredictedPass,
     PredictionEngineName,
+    SchedulerSettings,
     SortMode,
     StationConfig,
     WatchTarget,
@@ -275,7 +277,7 @@ def test_satellite_limit_is_applied_after_sorting():
         {first.id: first, second.id: second},
         SortMode.BEST_ELEVATION,
     )
-    selected, skipped = select_non_conflicting(ordered, [], 0, 1, 1)
+    selected, skipped = select_non_conflicting(ordered, [], 0, 1)
     assert [item.target_id for item in selected] == [second.id]
     assert skipped[0]["reason"] == "satellite_run_limit"
 
@@ -295,11 +297,85 @@ def test_conflicting_target_does_not_consume_satellite_limit():
     }
 
     selected, skipped = select_non_conflicting(
-        [first_pass, second_pass], [observation], 0, 1, 1
+        [first_pass, second_pass], [observation], 0, 1
     )
 
     assert [item.target_id for item in selected] == [second.id]
     assert any(item["reason"] == "conflict" for item in skipped)
+
+
+def test_all_non_conflicting_passes_for_an_admitted_satellite_are_selected():
+    target = make_target(0, "Frequent satellite")
+    first = make_pass(target, 80)
+    second = make_pass(target, 70)
+    second.start += timedelta(minutes=20)
+    second.peak += timedelta(minutes=20)
+    second.end += timedelta(minutes=20)
+
+    selected, skipped = select_non_conflicting([first, second], [], 0, 1)
+
+    assert selected == [first, second]
+    assert skipped == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_progress_reports_each_item_state(database: Database):
+    target = make_target(0, "Status satellite")
+    item = make_pass(target, 70)
+
+    class FakeCache:
+        @staticmethod
+        def expire(_prefix):
+            return 1
+
+    class FakeClient:
+        cache = FakeCache()
+
+        @staticmethod
+        def serialize_observation(station_id, transmitter_uuid, start, end):
+            return {
+                "ground_station": station_id,
+                "transmitter": transmitter_uuid,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            }
+
+        @staticmethod
+        async def create_observations(_payload):
+            return [{"id": 456}]
+
+    class FakeTargets:
+        @staticmethod
+        def record_success(_target_id):
+            return None
+
+        @staticmethod
+        def record_failure(_target_id, _message, _threshold):
+            return None
+
+    updates = []
+
+    async def progress(stage, message, details):
+        updates.append((stage, message, details))
+
+    executor = ScheduleExecutor(database, FakeClient(), FakeTargets())
+    result = await executor.execute(
+        StationConfig(
+            station_id=1,
+            latitude=35,
+            longitude=139,
+            altitude_m=10,
+            timezone="Asia/Tokyo",
+        ),
+        [item],
+        SchedulerSettings(batch_size=1),
+        "manual",
+        progress=progress,
+    )
+
+    statuses = [update[2]["items"][0]["status"] for update in updates]
+    assert statuses == ["waiting", "scheduling", "scheduled"]
+    assert result["items"][0]["observation_id"] == 456
 
 
 def test_transmitter_insights_combine_stats_and_recent_recommendation():

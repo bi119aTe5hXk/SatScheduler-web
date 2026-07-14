@@ -140,12 +140,14 @@ async def _run_schedule_job(job_id: str, request: ScheduleRequest) -> None:
 
     async def progress(stage: str, message: str, details: dict[str, Any]) -> None:
         global schedule_job
+        item_states = details.get("items", schedule_job.get("items", []))
         schedule_job = {
             **schedule_job,
             "status": "running",
             "stage": stage,
             "message": message,
-            "progress": details,
+            "progress": {key: value for key, value in details.items() if key != "items"},
+            "items": item_states,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -159,15 +161,27 @@ async def _run_schedule_job(job_id: str, request: ScheduleRequest) -> None:
             progress=progress,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
-        payload = {"job_id": job_id, "completed_at": completed_at, "result": result}
+        payload = {
+            "job_id": job_id,
+            "completed_at": completed_at,
+            "items": result.get("items", []),
+            "result": result,
+        }
         database.set_setting(SCHEDULE_CACHE_KEY, payload)
         schedule_job = {"status": "completed", "cached": False, **payload}
     except Exception as exc:
+        failed_items = []
+        for item in schedule_job.get("items", []):
+            item = dict(item)
+            if item.get("status") not in {"scheduled", "failed"}:
+                item.update(status="failed", error=str(exc))
+            failed_items.append(item)
         schedule_job = {
             "job_id": job_id,
             "status": "failed",
             "stage": "failed",
             "message": str(exc),
+            "items": failed_items,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -341,12 +355,26 @@ async def schedules_start(request: ScheduleRequest):
     if schedule_task and not schedule_task.done():
         return schedule_job
     job_id = str(uuid4())
+    item_states = [
+        {
+            "key": f"{item.target_id}:{item.start.isoformat()}",
+            "target_id": str(item.target_id),
+            "satellite_name": item.satellite_name,
+            "start": item.start.isoformat(),
+            "end": item.end.isoformat(),
+            "status": "waiting",
+            "observation_id": None,
+            "error": None,
+        }
+        for item in request.passes
+    ]
     schedule_job = {
         "job_id": job_id,
         "status": "running",
         "stage": "queued",
         "message": "Observation submission queued",
         "progress": {},
+        "items": item_states,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     schedule_task = asyncio.create_task(_run_schedule_job(job_id, request))

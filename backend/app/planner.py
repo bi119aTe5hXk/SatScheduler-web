@@ -99,7 +99,6 @@ def select_non_conflicting(
     candidates: list[PredictedPass],
     observations: list[dict[str, Any]],
     buffer_seconds: int,
-    passes_per_satellite: int,
     satellites_per_run: int,
 ) -> tuple[list[PredictedPass], list[dict[str, Any]]]:
     occupied: list[tuple[datetime, datetime, str]] = []
@@ -110,7 +109,6 @@ def select_non_conflicting(
             occupied.append((start, end, f"observation:{observation.get('id', '?')}"))
     selected: list[PredictedPass] = []
     skipped: list[dict[str, Any]] = []
-    count_by_target: dict[UUID, int] = {}
     admitted_targets: set[UUID] = set()
     buffer = timedelta(seconds=buffer_seconds)
     for item in candidates:
@@ -118,9 +116,6 @@ def select_non_conflicting(
             skipped.append(
                 {"pass": item.model_dump(mode="json"), "reason": "satellite_run_limit"}
             )
-            continue
-        if count_by_target.get(item.target_id, 0) >= passes_per_satellite:
-            skipped.append({"pass": item.model_dump(mode="json"), "reason": "per_satellite_limit"})
             continue
         start, end = item.start - buffer, item.end + buffer
         conflict = next(
@@ -133,7 +128,6 @@ def select_non_conflicting(
         selected.append(item)
         admitted_targets.add(item.target_id)
         occupied.append((start, end, f"selected:{item.target_id}"))
-        count_by_target[item.target_id] = count_by_target.get(item.target_id, 0) + 1
     return selected, skipped
 
 
@@ -271,7 +265,6 @@ class Planner:
             ordered,
             observations,
             settings.conflict_buffer_seconds,
-            settings.passes_per_satellite,
             settings.satellites_per_run,
         )
         skipped.extend(conflict_skips)

@@ -18,7 +18,10 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Minimum horizon, minimum/maximum culmination, wrapped azimuth and station-daylight filters.
 - Four scheduling modes: list priority, list priority plus elevation, elevation only, and
   SatNOGS default priority scoring.
-- Manual plan preview with single-pass or batch submission and per-observation fallback after batch failure.
+- Manual plan preview that selects every non-conflicting pass, supports removing/reordering the
+  review list, and requires confirmation before batch submission.
+- Live per-observation submission states (waiting, scheduling, scheduled or failed with the API
+  error) plus per-observation fallback after a batch failure.
 - Server-side background plan/submission jobs with live TLE, orbit-prediction, Observation-page,
   ranking, selection, batch and retry progress.
 - One-hour persistent plan-result cache; leaving the Schedule page does not cancel active work.
@@ -27,7 +30,7 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
   pass geometry and a polar plot.
 - Background-paginated Upcoming view with live page/record progress, a matching 48-hour timeline,
   force refresh and completion/failure notifications.
-- Cursor-paginated Reception archive.
+- Cursor-paginated Reception archive with loaded-record Good/Bad/Unknown filtering.
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
 - Persistent one-hour caches for satellite, transmitter, TLE, station, Upcoming and Reception lists.
@@ -84,8 +87,8 @@ Successful scheduling invalidates upcoming Observation pages immediately.
 The latest completed planning result is stored for one hour. Opening Schedule restores that result
 without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation
 and submission status remain on the server, so changing pages does not cancel either operation.
-The UI polls only local status endpoints and shows skipped-reason counts plus per-observation
-submission results.
+The UI polls only local status endpoints and shows skipped-reason counts plus a persistent,
+per-observation live submission status list.
 
 All outbound SatNOGS DB and Network requests share one global start-rate limiter. The interval is
 configured in Settings under `API request interval seconds` (0.5–30 seconds, default 4); changing
