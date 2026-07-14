@@ -107,8 +107,8 @@ export default function App() {
       {page === 'dashboard' && <Dashboard config={config} targets={targets} onNavigate={navigate} onNotify={notify} />}
       {page === 'targets' && <Targets targets={targets} onChanged={reload} onNotify={notify} />}
       {page === 'schedule' && <Schedule settings={settings} targets={targets} onNotify={notify} />}
-      {page === 'observations' && <ObservationList future title="Upcoming observations" initialSelected={observationDetail?.page === 'observations' ? observationDetail.id : null} onNotify={notify} />}
-      {page === 'receptions' && <ObservationList future={false} title="Reception archive" initialSelected={observationDetail?.page === 'receptions' ? observationDetail.id : null} onNotify={notify} />}
+      {page === 'observations' && <ObservationList future title="Upcoming observations" targets={targets} initialSelected={observationDetail?.page === 'observations' ? observationDetail.id : null} onNotify={notify} />}
+      {page === 'receptions' && <ObservationList future={false} title="Reception archive" targets={targets} initialSelected={observationDetail?.page === 'receptions' ? observationDetail.id : null} onNotify={notify} />}
       {page === 'settings' && <SettingsPage value={settings} config={config} onSaved={reload} onNotify={notify} />}
     </main>
   </div>
@@ -155,7 +155,13 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
     if (freshClientCache(observationViewCache.receptions)) return
     void refreshReceptions(false).catch(() => {})
   }, [])
-  const visibleUpcoming = useMemo(() => activeUpcoming(upcoming, now.getTime()), [upcoming, now])
+  useEffect(() => {
+    setUpcoming(current => {
+      const nextItems = activeUpcoming(current, now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+      return nextItems.length === current.length && nextItems.every((item, index) => item.id === current[index]?.id) ? current : nextItems
+    })
+  }, [now])
+  const visibleUpcoming = useMemo(() => activeUpcoming(upcoming, now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime()), [upcoming, now])
   const next = useMemo(() => [...visibleUpcoming].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [visibleUpcoming])
   const upcomingList = useMemo(() => [...visibleUpcoming].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime()).slice(0, 6), [visibleUpcoming])
   const receptionList = useMemo(() => [...receptions].sort((a, b) => new Date(b.end || b.start || 0).getTime() - new Date(a.end || a.start || 0).getTime()).slice(0, 6), [receptions])
@@ -168,7 +174,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
       <Metric label="Next automatic run" value={config?.automatic_job?.enabled ? 'ARMED' : 'OFF'} detail={formatUtc(config?.automatic_job?.next_run_at)} />
     </section>
     <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW{refreshing ? ' · updating in background' : ''}</small><h2>Station timeline</h2></div><button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div>
-      <Timeline observations={visibleUpcoming} />
+      <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
       {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl></div><PolarPlot observation={next} now={now} /></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
@@ -190,6 +196,17 @@ function observationFrequency(item: Observation): number | undefined {
 
 function degrees(value?: number): string {
   return value == null ? '—' : `${value.toFixed(1)}°`
+}
+
+function observationMatches(item: Observation, query: string, targets: Target[]): boolean {
+  const keyword = query.trim().toLocaleLowerCase()
+  if (!keyword) return true
+  const matchingTargets = targets.filter(target => (item.sat_id && target.sat_id === item.sat_id) || (item.norad_cat_id && target.norad_cat_id === item.norad_cat_id))
+  const matchingCatalog = (satelliteCatalogCache?.results || []).filter(satellite => (item.sat_id && satellite.sat_id === item.sat_id) || (item.norad_cat_id && satellite.norad_cat_id === item.norad_cat_id))
+  const catalogNames = matchingCatalog.flatMap(satellite => [satellite.name, satellite.names, satellite.aliases, satellite.alternative_names]).flatMap(value => Array.isArray(value) ? value : [value])
+  const frequencies = [item.observation_frequency, item.center_frequency, item.transmitter_downlink_low, item.transmitter_downlink_high].filter((value): value is number => value != null)
+  const values = [item.id, `#${item.id}`, observationSatellite(item), item.satellite_name, item.sat_id, item.norad_cat_id, item.transmitter_uuid, item.transmitter_description, item.transmitter_mode, item.transmitter_baud, item.observer, ...matchingTargets.flatMap(target => [target.name, target.satellite_name, target.sat_id, target.norad_cat_id]), ...catalogNames, ...frequencies.flatMap(value => [value, frequency(value), value / 1_000_000])]
+  return values.some(value => String(value ?? '').toLocaleLowerCase().includes(keyword))
 }
 
 function distanceFrom(now: Date, value?: string): string {
@@ -230,12 +247,22 @@ function PolarPlot({ observation, now }: { observation: Observation; now?: Date 
   return <div className="polar-wrap"><svg className="polar-plot" viewBox="0 0 260 260" role="img" aria-label={`Polar plot from ${riseAzimuth} degrees to ${setAzimuth} degrees, peak ${observation.max_altitude ?? 0} degrees`}><circle cx={center} cy={center} r={radius} /><circle cx={center} cy={center} r={radius * 2 / 3} /><circle cx={center} cy={center} r={radius / 3} /><line x1={center} y1={center - radius} x2={center} y2={center + radius} /><line x1={center - radius} y1={center} x2={center + radius} y2={center} /><text x={center} y="13">N</text><text x="250" y={center + 4}>E</text><text x={center} y="257">S</text><text x="10" y={center + 4}>W</text><text className="elevation-label" x={center + 4} y={center - radius * 2 / 3}>30°</text><text className="elevation-label" x={center + 4} y={center - radius / 3}>60°</text><path className="polar-path" d={`M ${rise.x} ${rise.y} Q ${control.x} ${control.y} ${set.x} ${set.y}`} /><circle className="polar-point rise" cx={rise.x} cy={rise.y} r="4" /><circle className="polar-point peak" cx={peak.x} cy={peak.y} r="5" /><circle className="polar-point set" cx={set.x} cy={set.y} r="4" />{live && <><circle className="polar-current-pulse" cx={current.x} cy={current.y} r="10" /><circle className="polar-current" cx={current.x} cy={current.y} r="5" /></>}</svg><div className="polar-legend"><span><i className="rise" />AOS {degrees(riseAzimuth)}</span><span><i className="peak" />MAX {degrees(observation.max_altitude)}</span><span><i className="set" />LOS {degrees(setAzimuth)}</span></div></div>
 }
 
+function MiniPolarPlot({ observation }: { observation: Observation }) {
+  const center = 32, radius = 26
+  const point = (azimuth: number, elevation: number) => { const angle = (azimuth - 90) * Math.PI / 180, distance = radius * (1 - elevation / 90); return { x: center + distance * Math.cos(angle), y: center + distance * Math.sin(angle) } }
+  const riseAzimuth = observation.rise_azimuth ?? 0, setAzimuth = observation.set_azimuth ?? 180
+  const delta = ((setAzimuth - riseAzimuth + 540) % 360) - 180, peakAzimuth = (riseAzimuth + delta / 2 + 360) % 360
+  const rise = point(riseAzimuth, 0), peak = point(peakAzimuth, observation.max_altitude ?? 0), set = point(setAzimuth, 0)
+  const control = { x: 2 * peak.x - (rise.x + set.x) / 2, y: 2 * peak.y - (rise.y + set.y) / 2 }
+  return <svg className="mini-polar" viewBox="0 0 64 64" aria-hidden="true"><circle className="mini-polar-horizon" cx={center} cy={center} r={radius} /><path d={`M ${rise.x} ${rise.y} Q ${control.x} ${control.y} ${set.x} ${set.y}`} /><circle className="rise" cx={rise.x} cy={rise.y} r="2.4" /><circle className="peak" cx={peak.x} cy={peak.y} r="2.7" /><circle className="set" cx={set.x} cy={set.y} r="2.4" /></svg>
+}
+
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
   return <div className="metric"><small>{label}</small><strong>{value}</strong><span>{detail}</span></div>
 }
 
-function Timeline({ observations }: { observations: Observation[] }) {
-  const start = Date.now(), span = 48 * 3600_000
+function Timeline({ observations, now }: { observations: Observation[]; now?: Date }) {
+  const start = now?.getTime() ?? Date.now(), span = 48 * 3600_000
   return <div className="timeline"><div className="timeline-axis"><span>NOW</span><span>+12H</span><span>+24H</span><span>+36H</span><span>+48H</span></div><div className="timeline-track">
     {observations.map(item => { const left = Math.max(0, Math.min(100, ((new Date(item.start || 0).getTime() - start) / span) * 100)); const width = Math.max(0.8, ((new Date(item.end || 0).getTime() - new Date(item.start || 0).getTime()) / span) * 100); return <span key={item.id} className="timeline-event" style={{ left: `${left}%`, width: `${width}%` }}><span className="timeline-tooltip"><strong>{observationSatellite(item)}</strong><span>{frequency(observationFrequency(item))} · {item.transmitter_mode || 'Unknown mode'}</span><span>{formatUtc(item.start)} → {formatUtc(item.end)}</span><span>{observationDuration(item)} · Observation #{item.id}</span></span></span> })}
   </div></div>
@@ -404,11 +431,12 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
   return <section className="panel job-progress"><div className="job-progress-heading"><span className="spinner" /><div><small>{label} · {String(job.stage || 'working').replaceAll('_', ' ')}</small><strong>{job.message || 'Working in the background…'}</strong></div>{current != null && <span>{current}{total ? ` / ${total}` : ''}</span>}{action}</div><div className={`job-progress-bar ${percentage == null ? 'indeterminate' : ''}`}><span style={percentage == null ? undefined : { width: `${percentage}%` }} /></div>{progress.records != null && <small>{progress.records} records loaded</small>}<p>Safe to leave this page. The task continues on the server.</p></section>
 }
 
-function ObservationList({ future, title, initialSelected, onNotify }: { future: boolean; title: string; initialSelected: number | null; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
+function ObservationList({ future, title, targets, initialSelected, onNotify }: { future: boolean; title: string; targets: Target[]; initialSelected: number | null; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
   const now = useClock()
   const initialCache = observationViewCache[future ? 'upcoming' : 'receptions']
   const [items, setItems] = useState<Observation[]>(future ? activeUpcoming(initialCache?.items || []) : initialCache?.items || []), [cursor, setCursor] = useState<string | null>(initialCache?.cursor || null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(initialSelected)
   const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
   const loadUpcoming = async (force = false, silent = false) => {
@@ -473,12 +501,13 @@ function ObservationList({ future, title, initialSelected, onNotify }: { future:
   if (selected != null) return <ObservationDetail observationId={selected} future={future} onBack={() => setSelected(null)} />
   const receptionStatus = (item: Observation): 'good' | 'bad' | 'unknown' => item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'unknown'
   const statusCounts = items.reduce((counts, item) => { counts[receptionStatus(item)] += 1; return counts }, { good: 0, bad: 0, unknown: 0 })
-  const visibleItems = future ? activeUpcoming(items, now.getTime()) : receptionFilter === 'all' ? items : items.filter(item => receptionStatus(item) === receptionFilter)
+  const statusFilteredItems = future ? activeUpcoming(items, now.getTime()) : receptionFilter === 'all' ? items : items.filter(item => receptionStatus(item) === receptionFilter)
+  const visibleItems = future ? statusFilteredItems : statusFilteredItems.filter(item => observationMatches(item, searchQuery, targets))
   return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => future ? loadUpcoming(true) : loadReceptionPage(true, true)}>{loading ? (future ? 'Restart refresh' : 'Refreshing…') : 'Refresh'}</button>} />
-    {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{visibleItems.length} observations</span></div><Timeline observations={visibleItems} /></section>}
+    {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{visibleItems.length} observations</span></div><Timeline observations={visibleItems} now={now} /></section>}
     {future && loading && <div className="fetch-progress"><span className="spinner" /><div><strong>{progress.page ? `Fetching page ${progress.page + 1}…` : 'Starting background update…'}</strong><small>{progress.page} page{progress.page === 1 ? '' : 's'} · {progress.records} observations loaded</small></div></div>}
-    {!future && <section className="reception-filters" aria-label="Reception status filter"><span>STATUS</span>{(['all', 'good', 'bad', 'unknown'] as const).map(status => <button key={status} className={receptionFilter === status ? 'active' : ''} onClick={() => setReceptionFilter(status)}>{status}<strong>{status === 'all' ? items.length : statusCounts[status]}</strong></button>)}<small>Counts apply to the {items.length} loaded records.</small></section>}
-    <div className="panel observation-list">{visibleItems.map(item => <button className="observation-row" key={item.id} onClick={() => setSelected(item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><small>{item.vetted_status || (future ? 'scheduled' : 'unknown')}</small></div><span className="detail-chevron">View detail →</span></button>)}{!visibleItems.length && !loading && <div className="empty">{!future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
+    {!future && <><section className="reception-search"><label>Search loaded receptions<input type="search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Observation ID, satellite, alias, SatNOGS/NORAD ID, mode, frequency or observer" /></label>{searchQuery && <button className="ghost" onClick={() => setSearchQuery('')}>Clear</button>}<span>{visibleItems.length} matches</span></section><section className="reception-filters" aria-label="Reception status filter"><span>STATUS</span>{(['all', 'good', 'bad', 'unknown'] as const).map(status => <button key={status} className={receptionFilter === status ? 'active' : ''} onClick={() => setReceptionFilter(status)}>{status}<strong>{status === 'all' ? items.length : statusCounts[status]}</strong></button>)}<small>Filters apply locally to the {items.length} loaded records.</small></section></>}
+    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => setSelected(item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">{!future && searchQuery ? 'No loaded receptions match this search.' : !future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
     {!future && cursor && <button className="load-more" onClick={() => loadReceptionPage()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}
   </div>
 }

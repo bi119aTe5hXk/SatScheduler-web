@@ -37,6 +37,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
   pass geometry and a polar plot.
 - Background-paginated Upcoming view with live page/record progress, a matching 48-hour timeline,
   force refresh and completion/failure notifications.
+- UTC-driven local timeline expiry/reordering, local Reception search across loaded observation and
+  radio fields, Observer labels, colored reception states and compact pass Polar Plots in both lists.
 - Cursor-paginated Reception archive with loaded-record Good/Bad/Unknown filtering.
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
