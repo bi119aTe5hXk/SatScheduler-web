@@ -40,6 +40,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
 - Persistent one-hour caches for satellite, transmitter, TLE, station, Upcoming and Reception lists.
+- A fixed UTC reference clock across every desktop and mobile page, conditional automatic-job
+  settings, and full-width Reception waterfalls with separate Audio and Polar Plot panels.
 - A shared configurable SatNOGS API request interval (4 seconds by default) covering DB/Network
   reads, pagination and observation submissions.
 - File and pasted-JSON import/export using the iOS-compatible SatScheduler watch-list format.
