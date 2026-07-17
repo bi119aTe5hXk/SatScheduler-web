@@ -22,38 +22,11 @@ const defaultSettings: Settings = {
   api_request_interval_seconds: 4, retry_individually: true, conflict_buffer_seconds: 300,
 }
 
-const CLIENT_CACHE_TTL = 60 * 60 * 1000
-let satelliteCatalogCache: { results: any[]; expiresAt: number } | null = null
-type ObservationCacheEntry = { items: Observation[]; cursor: string | null; pages: number; expiresAt: number; updatedAt?: number }
-const OBSERVATION_CACHE_KEY = 'satscheduler-observation-cache-v1'
-const observationViewCache: Partial<Record<'upcoming' | 'receptions', ObservationCacheEntry>> = (() => {
-  try { return JSON.parse(localStorage.getItem(OBSERVATION_CACHE_KEY) || '{}') } catch { return {} }
-})()
-
 function activeUpcoming(items: Observation[], now = Date.now()): Observation[] {
   return items.filter(item => {
     const end = new Date(item.end || item.start || 0).getTime()
     return Number.isFinite(end) && end > now
   })
-}
-
-function saveObservationCache(kind: 'upcoming' | 'receptions', entry: ObservationCacheEntry) {
-  observationViewCache[kind] = { ...entry, items: kind === 'upcoming' ? activeUpcoming(entry.items) : entry.items, updatedAt: Date.now() }
-  try { localStorage.setItem(OBSERVATION_CACHE_KEY, JSON.stringify(observationViewCache)) } catch { /* storage may be unavailable */ }
-}
-
-function mergeUpcomingCache(additions: Observation[]): Observation[] {
-  const previous = observationViewCache.upcoming
-  const byId = new Map<number, Observation>()
-  for (const item of previous?.items || []) byId.set(item.id, item)
-  for (const item of additions) byId.set(item.id, { ...byId.get(item.id), ...item })
-  const items = activeUpcoming([...byId.values()]).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
-  saveObservationCache('upcoming', { items, cursor: previous?.cursor || null, pages: previous?.pages || 1, expiresAt: previous?.expiresAt ?? Date.now() + CLIENT_CACHE_TTL })
-  return items
-}
-
-function freshClientCache<T extends { expiresAt: number }>(entry?: T | null): entry is T {
-  return Boolean(entry && entry.expiresAt > Date.now())
 }
 
 function useClock() {
@@ -71,6 +44,9 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' | 'info' } | null>(null)
   const notify = (message: string, tone: 'success' | 'error' | 'info' = 'error') => setNotice({ message, tone })
+  useEffect(() => {
+    try { localStorage.removeItem('satscheduler-observation-cache-v1') } catch { /* legacy cache cleanup only */ }
+  }, [])
   useEffect(() => {
     if (!notice) return
     const timer = window.setTimeout(() => setNotice(null), notice.tone === 'info' ? 3500 : 6000)
@@ -124,8 +100,8 @@ function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string
 
 function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; targets: Target[]; onNavigate: (p: Page, observationId?: number) => void; onNotify: Notify }) {
   const now = useClock()
-  const [upcoming, setUpcoming] = useState<Observation[]>(activeUpcoming(observationViewCache.upcoming?.items || []))
-  const [receptions, setReceptions] = useState<Observation[]>(observationViewCache.receptions?.items || [])
+  const [upcoming, setUpcoming] = useState<Observation[]>([])
+  const [receptions, setReceptions] = useState<Observation[]>([])
   const [refreshing, setRefreshing] = useState(false), [refreshingReceptions, setRefreshingReceptions] = useState(false)
   const [refreshProgress, setRefreshProgress] = useState({ page: 0, records: 0 })
   const refreshInFlight = useRef(false), receptionRefreshInFlight = useRef(false)
@@ -148,7 +124,6 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
         seenCursors.add(nextCursor); cursor = nextCursor
       }
       const items = activeUpcoming(collected).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
-      saveObservationCache('upcoming', { items, cursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
       setUpcoming(items)
     } finally { refreshInFlight.current = false; setRefreshing(false) }
   }
@@ -157,17 +132,13 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
     receptionRefreshInFlight.current = true; setRefreshingReceptions(true)
     try {
       const value = await api<any>(`/observations/receptions${force ? '?force=true' : ''}`), items = value.results || []
-      saveObservationCache('receptions', { items, cursor: value.next_cursor || null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
       setReceptions(items)
     } finally { receptionRefreshInFlight.current = false; setRefreshingReceptions(false) }
   }
   useEffect(() => {
-    const cached = observationViewCache.upcoming
-    if (freshClientCache(cached)) return
     void refreshTimeline(false).catch(() => {})
   }, [])
   useEffect(() => {
-    if (freshClientCache(observationViewCache.receptions)) return
     void refreshReceptions(false).catch(() => {})
   }, [])
   useEffect(() => {
@@ -217,10 +188,8 @@ function observationMatches(item: Observation, query: string, targets: Target[])
   const keyword = query.trim().toLocaleLowerCase()
   if (!keyword) return true
   const matchingTargets = targets.filter(target => (item.sat_id && target.sat_id === item.sat_id) || (item.norad_cat_id && target.norad_cat_id === item.norad_cat_id))
-  const matchingCatalog = (satelliteCatalogCache?.results || []).filter(satellite => (item.sat_id && satellite.sat_id === item.sat_id) || (item.norad_cat_id && satellite.norad_cat_id === item.norad_cat_id))
-  const catalogNames = matchingCatalog.flatMap(satellite => [satellite.name, satellite.names, satellite.aliases, satellite.alternative_names]).flatMap(value => Array.isArray(value) ? value : [value])
   const frequencies = [item.observation_frequency, item.center_frequency, item.transmitter_downlink_low, item.transmitter_downlink_high].filter((value): value is number => value != null)
-  const values = [item.id, `#${item.id}`, observationSatellite(item), item.satellite_name, item.sat_id, item.norad_cat_id, item.transmitter_uuid, item.transmitter_description, item.transmitter_mode, item.transmitter_baud, item.observer, ...matchingTargets.flatMap(target => [target.name, target.satellite_name, target.sat_id, target.norad_cat_id]), ...catalogNames, ...frequencies.flatMap(value => [value, frequency(value), value / 1_000_000])]
+  const values = [item.id, `#${item.id}`, observationSatellite(item), item.satellite_name, item.tle0, item.sat_id, item.norad_cat_id, item.transmitter_uuid, item.transmitter_description, item.transmitter_mode, item.transmitter_baud, item.observer, ...matchingTargets.flatMap(target => [target.name, target.satellite_name, target.sat_id, target.norad_cat_id]), ...frequencies.flatMap(value => [value, frequency(value), value / 1_000_000])]
   return values.some(value => String(value ?? '').toLocaleLowerCase().includes(keyword))
 }
 
@@ -321,7 +290,7 @@ function TargetEditor({ value, onClose, onSaved, onNotify }: { value?: Target; o
   const [transmitters, setTransmitters] = useState<TransmitterInsight[]>([]), [loadingTransmitters, setLoadingTransmitters] = useState(false), [loadingInsights, setLoadingInsights] = useState(false), [insightError, setInsightError] = useState('')
   const transmitterRequest = useRef(0)
   const [form, setForm] = useState<any>(value || { name: '', sat_id: '', transmitter_uuid: '', priority: 1, enabled: true, requires_station_daylight: false, daylight_solar_elevation: -6 })
-  const loadSatellites = async (force = false) => { if (!force && freshClientCache(satelliteCatalogCache)) { setSatellites(satelliteCatalogCache.results); setLoadingSatellites(false); return } setLoadingSatellites(true); try { const value = await api<any>(`/satellites${force ? '?force=true' : ''}`); const results = value.results || []; satelliteCatalogCache = { results, expiresAt: Date.now() + CLIENT_CACHE_TTL }; setSatellites(results); if (force) onNotify(`Satellite catalog updated: ${results.length} records.`, 'success') } catch (error) { onNotify(`Satellite catalog update failed: ${String(error)}`, 'error') } finally { setLoadingSatellites(false) } }
+  const loadSatellites = async (force = false) => { setLoadingSatellites(true); try { const value = await api<any>(`/satellites${force ? '?force=true' : ''}`); const results = value.results || []; setSatellites(results); if (force) onNotify(`Satellite catalog updated: ${results.length} records.`, 'success') } catch (error) { onNotify(`Satellite catalog update failed: ${String(error)}`, 'error') } finally { setLoadingSatellites(false) } }
   useEffect(() => { void loadSatellites(false) }, [])
   const loadInsights = async (satId: string, requestId: number, force = false) => {
     setLoadingInsights(true); setInsightError('')
@@ -382,7 +351,7 @@ function TransmitterStatsBar({ transmitter, loading = false }: { transmitter: Tr
 
 function Schedule({ settings, targets, onNotify }: { settings: Settings; targets: Target[]; onNotify: Notify }) {
   const [plan, setPlan] = useState<any>(null), [draftPasses, setDraftPasses] = useState<Pass[]>([]), [planJob, setPlanJob] = useState<any>({ status: 'idle' }), [scheduleJob, setScheduleJob] = useState<any>({ status: 'idle' }), [result, setResult] = useState<any>(null)
-  const [stationObservations, setStationObservations] = useState<Observation[]>(observationViewCache.upcoming?.items || []), [timelineLoading, setTimelineLoading] = useState(false)
+  const [stationObservations, setStationObservations] = useState<Observation[]>([]), [timelineLoading, setTimelineLoading] = useState(false)
   const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null), loadedPlanJob = useRef<string | null>(null), processedScheduleJob = useRef<string | null>(null), timelineRefreshInFlight = useRef(false)
   const refreshStationTimeline = async (force = false) => {
     if (timelineRefreshInFlight.current) return
@@ -390,7 +359,6 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
     try {
       const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = value.results || []
       setStationObservations(items)
-      saveObservationCache('upcoming', { items, cursor: null, pages: 1, expiresAt: Date.now() + CLIENT_CACHE_TTL })
     } finally { timelineRefreshInFlight.current = false; setTimelineLoading(false) }
   }
   const updateJobs = async () => {
@@ -411,7 +379,11 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
             const planned = plannedByKey.get(`${item.target_id}:${new Date(item.start).getTime()}`), target = targets.find(value => value.id === item.target_id)
             return { id: Number(item.observation_id), start: item.start, end: item.end, satellite_name: item.satellite_name || planned?.satellite_name || target?.satellite_name || target?.name, sat_id: planned?.sat_id || target?.sat_id, transmitter_uuid: planned?.transmitter_uuid || target?.transmitter_uuid, transmitter_description: target?.transmitter_description, center_frequency: target?.center_frequency, max_altitude: planned?.peak_elevation, rise_azimuth: planned?.rise_azimuth, set_azimuth: planned?.set_azimuth, status: 'future' }
           })
-          if (additions.length) setStationObservations(mergeUpcomingCache(additions))
+          if (additions.length) setStationObservations(current => {
+            const byId = new Map(current.map(item => [item.id, item]))
+            additions.forEach(item => byId.set(item.id, { ...byId.get(item.id), ...item }))
+            return activeUpcoming([...byId.values()]).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+          })
           setDraftPasses(current => current.filter(item => keep.has(`${item.target_id}:${new Date(item.start).getTime()}`)))
           processedScheduleJob.current = nextScheduleJob.job_id
         }
@@ -421,9 +393,6 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
   }
   useEffect(() => { void updateJobs() }, [])
   useEffect(() => {
-    const cached = observationViewCache.upcoming
-    if (cached?.items.length) setStationObservations(cached.items)
-    if (freshClientCache(cached)) return
     void refreshStationTimeline(false).catch(error => onNotify(`Station timeline update failed: ${String(error)}`, 'error'))
   }, [])
   useEffect(() => {
@@ -457,15 +426,12 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
 
 function ObservationList({ future, title, targets, initialSelected, onNotify }: { future: boolean; title: string; targets: Target[]; initialSelected: number | null; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
   const now = useClock()
-  const initialCache = observationViewCache[future ? 'upcoming' : 'receptions']
-  const [items, setItems] = useState<Observation[]>(future ? activeUpcoming(initialCache?.items || []) : initialCache?.items || []), [cursor, setCursor] = useState<string | null>(initialCache?.cursor || null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(initialSelected)
+  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(initialSelected)
   const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
   const loadUpcoming = async (force = false, silent = false) => {
-    const cached = observationViewCache.upcoming
-    if (!force && freshClientCache(cached)) { const active = activeUpcoming(cached.items); setItems(active); setCursor(cached.cursor); setProgress({ page: cached.pages, records: active.length }); return }
     if (silent && request.current) return
     request.current?.abort()
     const controller = new AbortController()
@@ -488,11 +454,9 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
         if (!nextCursor || seenCursors.has(nextCursor)) break
         seenCursors.add(nextCursor)
       }
-      saveObservationCache('upcoming', { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
       if (!silent) onNotify(`Upcoming observations updated: ${collected.length} records from ${pages} page${pages === 1 ? '' : 's'}.`, 'success')
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
-        if (collected.length) saveObservationCache('upcoming', { items: [...collected], cursor: nextCursor, pages, expiresAt: Date.now() + CLIENT_CACHE_TTL })
         onNotify(`Upcoming observations ${collected.length ? 'partially updated' : 'update failed'} after page ${pages}: ${String(error)}`, 'error')
       }
     } finally {
@@ -500,8 +464,6 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
     }
   }
   const loadReceptionPage = async (reset = false, force = false) => {
-    const cached = observationViewCache.receptions
-    if (reset && !force && freshClientCache(cached)) { setItems(cached.items); setCursor(cached.cursor); return }
     setLoading(true)
     try {
       const activeCursor = reset ? null : cursor, params = new URLSearchParams()
@@ -509,15 +471,14 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
       if (force) params.set('force', 'true')
       const data = await api<any>(`/observations/receptions${params.size ? `?${params}` : ''}`)
       const nextCursor = data.next_cursor || null
-      setItems(previous => { const merged = reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))]; saveObservationCache('receptions', { items: merged, cursor: nextCursor, pages: reset ? 1 : (observationViewCache.receptions?.pages || 1) + 1, expiresAt: Date.now() + CLIENT_CACHE_TTL }); return merged })
+      setItems(previous => reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))])
       setCursor(nextCursor)
       if (reset) onNotify(`Reception archive updated: ${data.results.length} records loaded.`, 'success')
     } catch (error) { onNotify(`Reception archive update failed: ${String(error)}`, 'error') }
     finally { setLoading(false) }
   }
   useEffect(() => {
-    const cached = observationViewCache[future ? 'upcoming' : 'receptions']
-    setItems(future ? activeUpcoming(cached?.items || []) : cached?.items || []); setCursor(cached?.cursor || null); setSelected(initialSelected)
+    setItems([]); setCursor(null); setProgress({ page: 0, records: 0 }); setSelected(initialSelected)
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
     return () => request.current?.abort()
   }, [future])

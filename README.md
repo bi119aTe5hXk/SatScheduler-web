@@ -94,16 +94,16 @@ docker buildx build --platform linux/amd64,linux/arm/v7 -t IMAGE --push .
 ## Cache behavior
 
 Satellite catalogs, per-satellite transmitters, batched TLEs, station details, Upcoming pages and
-Reception pages use a persistent one-hour TTL in SQLite. The web UI also keeps satellite and
-Observation lists for one hour so reopening a page does not make another backend request. A manual
-refresh bypasses both cache layers. Observation details and their artifact URLs remain uncached.
-Upcoming and Reception summaries also persist in browser storage and use stale-while-revalidate:
-expired data remains visible while a background refresh runs. Successful scheduling is merged into
-both the server's existing Upcoming cache and the browser cache immediately instead of clearing it.
-An optional 1–24 hour Upcoming auto-refresh runs inside the backend scheduler, including when no
-browser is open. Overview shows six cached Upcoming observations and six cached Reception results;
-each entry opens its detail page. The Reception summary refresh requests only the newest page,
-while an Upcoming refresh updates the complete paginated station timeline.
+Reception pages use a persistent one-hour TTL in SQLite. The web UI requests the backend when a
+page opens or switches; the backend returns the shared server cache when it is still fresh, so
+multiple browsers and devices see the same data without each keeping a separate persistent copy.
+A manual refresh bypasses the relevant server cache. Observation details and their artifact URLs
+remain uncached. Successful scheduling is merged into the server's existing Upcoming cache
+immediately, and the active Schedule page also reflects the new observations in memory. An optional
+1–24 hour Upcoming auto-refresh runs inside the backend scheduler, including when no browser is
+open. Overview shows six cached Upcoming observations and six cached Reception results; each entry
+opens its detail page. The Reception summary refresh requests only the newest page, while an
+Upcoming refresh updates the complete paginated station timeline.
 
 The latest completed planning result is stored for one hour. Opening Schedule restores that result
 without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation
