@@ -103,28 +103,23 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
   const [upcoming, setUpcoming] = useState<Observation[]>([])
   const [receptions, setReceptions] = useState<Observation[]>([])
   const [refreshing, setRefreshing] = useState(false), [refreshingReceptions, setRefreshingReceptions] = useState(false)
+  const [backgroundTimelineRefresh, setBackgroundTimelineRefresh] = useState(false)
   const [refreshProgress, setRefreshProgress] = useState({ page: 0, records: 0 })
-  const refreshInFlight = useRef(false), receptionRefreshInFlight = useRef(false)
+  const refreshInFlight = useRef(false), receptionRefreshInFlight = useRef(false), timelinePollTimer = useRef<number | null>(null)
   const refreshTimeline = async (force = false) => {
     if (refreshInFlight.current) return
     refreshInFlight.current = true; setRefreshing(true); setRefreshProgress({ page: 0, records: 0 })
     try {
-      const collected: Observation[] = [], seenIds = new Set<number>(), seenCursors = new Set<string>()
-      let cursor: string | null = null, pages = 0
-      while (pages < 20) {
-        const params = new URLSearchParams()
-        if (cursor) params.set('cursor', cursor)
-        if (force) params.set('force', 'true')
-        const value = await api<any>(`/observations/upcoming${params.size ? `?${params}` : ''}`)
-        pages += 1
-        for (const item of value.results || []) if (!seenIds.has(item.id)) { seenIds.add(item.id); collected.push(item) }
-        setRefreshProgress({ page: pages, records: activeUpcoming(collected).length })
-        const nextCursor = value.next_cursor || null
-        if (!nextCursor || seenCursors.has(nextCursor)) { cursor = null; break }
-        seenCursors.add(nextCursor); cursor = nextCursor
-      }
-      const items = activeUpcoming(collected).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+      const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`)
+      const items = activeUpcoming(value.results || []).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
+      setRefreshProgress({ page: value.cache?.pages || 1, records: items.length })
       setUpcoming(items)
+      const refreshingOnServer = Boolean(value.cache?.refreshing)
+      setBackgroundTimelineRefresh(refreshingOnServer)
+      if (refreshingOnServer) {
+        if (timelinePollTimer.current) window.clearTimeout(timelinePollTimer.current)
+        timelinePollTimer.current = window.setTimeout(() => { timelinePollTimer.current = null; void refreshTimeline(false).catch(() => {}) }, 15000)
+      }
     } finally { refreshInFlight.current = false; setRefreshing(false) }
   }
   const refreshReceptions = async (force = false) => {
@@ -137,6 +132,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
   }
   useEffect(() => {
     void refreshTimeline(false).catch(() => {})
+    return () => { if (timelinePollTimer.current) window.clearTimeout(timelinePollTimer.current) }
   }, [])
   useEffect(() => {
     void refreshReceptions(false).catch(() => {})
@@ -159,7 +155,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
       <Metric label="Upcoming" value={String(visibleUpcoming.length)} detail="Active cached observations" />
       <Metric label="Next automatic run" value={config?.automatic_job?.enabled ? 'ARMED' : 'OFF'} detail={formatUtc(config?.automatic_job?.next_run_at)} />
     </section>
-    <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Station timeline</h2></div><div className="timeline-update-actions">{refreshing && <span className="timeline-update-status"><i className="spinner" /><span><strong>{refreshProgress.page ? `Updating · page ${refreshProgress.page}` : 'Starting background update…'}</strong><small>{refreshProgress.records} active observations loaded</small></span></span>}<button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div></div>
+    <section className="panel"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Station timeline</h2></div><div className="timeline-update-actions">{(refreshing || backgroundTimelineRefresh) && <span className="timeline-update-status"><i className="spinner" /><span><strong>{backgroundTimelineRefresh ? 'Updating from SatNOGS in background' : refreshProgress.page ? `Updating · page ${refreshProgress.page}` : 'Starting background update…'}</strong><small>{refreshProgress.records} active observations loaded</small></span></span>}<button className="ghost" onClick={() => onNavigate('observations')}>Open list</button></div></div>
       <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
@@ -352,13 +348,17 @@ function TransmitterStatsBar({ transmitter, loading = false }: { transmitter: Tr
 function Schedule({ settings, targets, onNotify }: { settings: Settings; targets: Target[]; onNotify: Notify }) {
   const [plan, setPlan] = useState<any>(null), [draftPasses, setDraftPasses] = useState<Pass[]>([]), [planJob, setPlanJob] = useState<any>({ status: 'idle' }), [scheduleJob, setScheduleJob] = useState<any>({ status: 'idle' }), [result, setResult] = useState<any>(null)
   const [stationObservations, setStationObservations] = useState<Observation[]>([]), [timelineLoading, setTimelineLoading] = useState(false)
-  const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null), loadedPlanJob = useRef<string | null>(null), processedScheduleJob = useRef<string | null>(null), timelineRefreshInFlight = useRef(false)
+  const activePlanJob = useRef<string | null>(null), activeScheduleJob = useRef<string | null>(null), loadedPlanJob = useRef<string | null>(null), processedScheduleJob = useRef<string | null>(null), timelineRefreshInFlight = useRef(false), timelinePollTimer = useRef<number | null>(null)
   const refreshStationTimeline = async (force = false) => {
     if (timelineRefreshInFlight.current) return
     timelineRefreshInFlight.current = true; setTimelineLoading(true)
     try {
       const value = await api<any>(`/observations/overview${force ? '?force=true' : ''}`), items = value.results || []
       setStationObservations(items)
+      if (value.cache?.refreshing) {
+        if (timelinePollTimer.current) window.clearTimeout(timelinePollTimer.current)
+        timelinePollTimer.current = window.setTimeout(() => { timelinePollTimer.current = null; void refreshStationTimeline(false).catch(error => onNotify(`Station timeline update failed: ${String(error)}`, 'error')) }, 15000)
+      }
     } finally { timelineRefreshInFlight.current = false; setTimelineLoading(false) }
   }
   const updateJobs = async () => {
@@ -394,6 +394,7 @@ function Schedule({ settings, targets, onNotify }: { settings: Settings; targets
   useEffect(() => { void updateJobs() }, [])
   useEffect(() => {
     void refreshStationTimeline(false).catch(error => onNotify(`Station timeline update failed: ${String(error)}`, 'error'))
+    return () => { if (timelinePollTimer.current) window.clearTimeout(timelinePollTimer.current) }
   }, [])
   useEffect(() => {
     if (planJob.status !== 'running' && scheduleJob.status !== 'running') return
@@ -431,6 +432,15 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
   const [searchQuery, setSearchQuery] = useState('')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
+  const serverRefreshPollTimer = useRef<number | null>(null)
+  const pollAfterServerRefresh = () => {
+    if (serverRefreshPollTimer.current) window.clearTimeout(serverRefreshPollTimer.current)
+    serverRefreshPollTimer.current = window.setTimeout(() => {
+      serverRefreshPollTimer.current = null
+      if (future) void loadUpcoming(false, true)
+      else void loadReceptionPage(true, false)
+    }, 15000)
+  }
   const loadUpcoming = async (force = false, silent = false) => {
     if (silent && request.current) return
     request.current?.abort()
@@ -439,12 +449,14 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
     setLoading(true); setProgress({ page: 0, records: items.length })
     const collected: Observation[] = [], seenIds = new Set<number>(), seenCursors = new Set<string>()
     let nextCursor: string | null = null, pages = 0
+    let serverRefreshing = false
     try {
       while (pages < 20) {
         const params = new URLSearchParams()
         if (nextCursor) params.set('cursor', nextCursor)
         if (force) params.set('force', 'true')
         const data = await api<any>(`/observations/upcoming${params.size ? `?${params}` : ''}`, { signal: controller.signal })
+        serverRefreshing = serverRefreshing || Boolean(data.cache?.refreshing)
         pages += 1
         for (const item of data.results || []) if (!seenIds.has(item.id)) { seenIds.add(item.id); collected.push(item) }
         collected.sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())
@@ -454,6 +466,7 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
         if (!nextCursor || seenCursors.has(nextCursor)) break
         seenCursors.add(nextCursor)
       }
+      if (serverRefreshing) pollAfterServerRefresh()
       if (!silent) onNotify(`Upcoming observations updated: ${collected.length} records from ${pages} page${pages === 1 ? '' : 's'}.`, 'success')
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
@@ -473,6 +486,7 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
       const nextCursor = data.next_cursor || null
       setItems(previous => reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))])
       setCursor(nextCursor)
+      if (data.cache?.refreshing) pollAfterServerRefresh()
       if (reset) onNotify(`Reception archive updated: ${data.results.length} records loaded.`, 'success')
     } catch (error) { onNotify(`Reception archive update failed: ${String(error)}`, 'error') }
     finally { setLoading(false) }
@@ -480,7 +494,7 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
   useEffect(() => {
     setItems([]); setCursor(null); setProgress({ page: 0, records: 0 }); setSelected(initialSelected)
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
-    return () => request.current?.abort()
+    return () => { request.current?.abort(); if (serverRefreshPollTimer.current) window.clearTimeout(serverRefreshPollTimer.current) }
   }, [future])
   useEffect(() => { setSelected(initialSelected) }, [initialSelected])
   if (selected != null) return <ObservationDetail observationId={selected} future={future} onBack={() => setSelected(null)} />

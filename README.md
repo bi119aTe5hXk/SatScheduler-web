@@ -97,13 +97,16 @@ Satellite catalogs, per-satellite transmitters, batched TLEs, station details, U
 Reception pages use a persistent one-hour TTL in SQLite. The web UI requests the backend when a
 page opens or switches; the backend returns the shared server cache when it is still fresh, so
 multiple browsers and devices see the same data without each keeping a separate persistent copy.
-A manual refresh bypasses the relevant server cache. Observation details and their artifact URLs
-remain uncached. Successful scheduling is merged into the server's existing Upcoming cache
-immediately, and the active Schedule page also reflects the new observations in memory. An optional
-1–24 hour Upcoming auto-refresh runs inside the backend scheduler, including when no browser is
-open. Overview shows six cached Upcoming observations and six cached Reception results; each entry
-opens its detail page. The Reception summary refresh requests only the newest page, while an
-Upcoming refresh updates the complete paginated station timeline.
+When the server cache is expired but still available, Upcoming, Overview, Schedule and Reception
+views return the stale SQLite data immediately and start a deduplicated background refresh; the web
+UI polls the backend and replaces the timeline/list once the refreshed cache is ready. A manual
+refresh bypasses the relevant server cache. Observation details and their artifact URLs remain
+uncached. Successful scheduling is merged into the server's existing Upcoming cache immediately,
+and the active Schedule page also reflects the new observations in memory. An optional 1–24 hour
+Upcoming auto-refresh runs inside the backend scheduler, including when no browser is open.
+Overview shows six cached Upcoming observations and six cached Reception results; each entry opens
+its detail page. The Reception summary refresh requests only the newest page, while an Upcoming
+refresh updates the complete paginated station timeline.
 
 The latest completed planning result is stored for one hour. Opening Schedule restores that result
 without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation

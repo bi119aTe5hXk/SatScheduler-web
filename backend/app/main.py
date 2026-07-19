@@ -66,6 +66,8 @@ schedule_job: dict[str, Any] = {"status": "idle"}
 plan_task: asyncio.Task | None = None
 schedule_task: asyncio.Task | None = None
 schedule_cancel_requested = False
+observation_refresh_tasks: dict[str, asyncio.Task] = {}
+future_refresh_tasks: dict[int, asyncio.Task] = {}
 
 
 def _cached_job(key: str, ttl: timedelta = timedelta(hours=1)) -> dict[str, Any] | None:
@@ -87,6 +89,105 @@ def _job_snapshot(job: dict[str, Any], cache_key: str) -> dict[str, Any]:
         )
         return job if completed_at >= datetime.now(timezone.utc) - timedelta(hours=1) else {"status": "idle"}
     return _cached_job(cache_key) or job
+
+
+def _observation_cache_key(
+    station_id: int, *, future: bool, cursor: str | None = None
+) -> str:
+    return f"observations:{station_id}:{int(future)}:{cursor or 'first'}"
+
+
+def _cache_metadata(entry: dict[str, Any], *, refreshing: bool = False) -> dict[str, Any]:
+    return {
+        name: value
+        for name, value in {**entry, "refreshing": refreshing}.items()
+        if name != "payload"
+    }
+
+
+async def _refresh_observation_page(
+    station_id: int, *, future: bool, cursor: str | None = None
+) -> None:
+    try:
+        await client.observation_page(
+            station_id, future=future, cursor=cursor, use_cache=True, force=True
+        )
+    except Exception:
+        logging.exception("Background Observation page refresh failed")
+
+
+def _start_observation_refresh(
+    station_id: int, *, future: bool, cursor: str | None = None
+) -> bool:
+    key = _observation_cache_key(station_id, future=future, cursor=cursor)
+    task = observation_refresh_tasks.get(key)
+    if task and not task.done():
+        return True
+    task = asyncio.create_task(
+        _refresh_observation_page(station_id, future=future, cursor=cursor)
+    )
+    observation_refresh_tasks[key] = task
+    task.add_done_callback(lambda _: observation_refresh_tasks.pop(key, None))
+    return True
+
+
+def _cached_observation_page_response(
+    station_id: int,
+    *,
+    future: bool,
+    cursor: str | None = None,
+) -> dict[str, Any] | None:
+    key = _observation_cache_key(station_id, future=future, cursor=cursor)
+    entry = cache.get_entry(key)
+    if not entry:
+        return None
+    refreshing = False if entry["fresh"] else _start_observation_refresh(
+        station_id, future=future, cursor=cursor
+    )
+    payload = dict(entry["payload"])
+    payload["cache"] = _cache_metadata(entry, refreshing=refreshing)
+    return payload
+
+
+def _cached_future_observations(station_id: int) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    cursor: str | None = None
+    pages = 0
+    results: list[dict[str, Any]] = []
+    fresh = True
+    seen: set[str] = set()
+    while pages < 20:
+        entry = cache.get_entry(_observation_cache_key(station_id, future=True, cursor=cursor))
+        if not entry:
+            break
+        payload = entry["payload"]
+        results.extend(payload.get("results", []))
+        fresh = fresh and bool(entry["fresh"])
+        pages += 1
+        cursor = payload.get("next_cursor")
+        if not cursor or cursor in seen:
+            break
+        seen.add(cursor)
+    if not results:
+        return None
+    metadata = {"fresh": fresh, "pages": pages, "refreshing": False}
+    return results, metadata
+
+
+async def _refresh_future_observations(station_id: int) -> None:
+    try:
+        await client.all_future_observations(station_id, force=True)
+    except Exception:
+        logging.exception("Background full Upcoming refresh failed")
+
+
+def _start_future_refresh(station_id: int) -> bool:
+    task = future_refresh_tasks.get(station_id)
+    if task and not task.done():
+        return True
+    task = asyncio.create_task(_refresh_future_observations(station_id))
+    future_refresh_tasks[station_id] = task
+    task.add_done_callback(lambda _: future_refresh_tasks.pop(station_id, None))
+    return True
 
 
 async def _run_plan_job(job_id: str, request: PlanRequest) -> None:
@@ -412,6 +513,12 @@ async def schedules_run_automatic():
 @app.get("/api/observations/upcoming")
 async def observations_upcoming(cursor: str | None = Query(default=None), force: bool = False):
     station = await resolve_station(database, client)
+    if not force:
+        cached = _cached_observation_page_response(
+            station.station_id, future=True, cursor=cursor
+        )
+        if cached:
+            return cached
     return await client.observation_page(
         station.station_id, future=True, cursor=cursor, use_cache=True, force=force
     )
@@ -420,9 +527,17 @@ async def observations_upcoming(cursor: str | None = Query(default=None), force:
 @app.get("/api/observations/overview")
 async def observations_overview(force: bool = False):
     station = await resolve_station(database, client)
+    if not force:
+        cached = _cached_future_observations(station.station_id)
+        if cached:
+            results, metadata = cached
+            if not metadata["fresh"]:
+                metadata["refreshing"] = _start_future_refresh(station.station_id)
+            results.sort(key=lambda item: item.get("start", ""))
+            return {"results": results, "cache": metadata}
     results = await client.all_future_observations(station.station_id, force=force)
     results.sort(key=lambda item: item.get("start", ""))
-    return {"results": results}
+    return {"results": results, "cache": {"fresh": True, "refreshing": False}}
 
 
 @app.get("/api/observations/receptions")
@@ -430,6 +545,12 @@ async def observations_receptions(
     cursor: str | None = Query(default=None), force: bool = False
 ):
     station = await resolve_station(database, client)
+    if not force:
+        cached = _cached_observation_page_response(
+            station.station_id, future=False, cursor=cursor
+        )
+        if cached:
+            return cached
     return await client.observation_page(
         station.station_id, future=False, cursor=cursor, use_cache=True, force=force
     )
