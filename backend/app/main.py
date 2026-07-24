@@ -16,6 +16,7 @@ from app.cache import PersistentCache
 from app.config import ENV
 from app.db import configure_database
 from app.executor import ScheduleExecutor
+from app.groundtrack import observation_ground_track
 from app.import_export import export_configuration, import_configuration
 from app.jobs import AutomaticScheduler
 from app.planner import Planner
@@ -559,6 +560,25 @@ async def observations_receptions(
 @app.get("/api/observations/{observation_id}")
 async def observation_detail(observation_id: int):
     return await client.observation(observation_id)
+
+
+@app.get("/api/observations/{observation_id}/ground-track")
+async def observation_track(observation_id: int):
+    observation = await client.observation(observation_id)
+    try:
+        track = observation_ground_track(observation)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if track["station"] is None:
+        try:
+            station = await resolve_station(database, client)
+            track["station"] = {
+                "latitude": station.latitude,
+                "longitude": station.longitude,
+            }
+        except Exception:
+            pass
+    return track
 
 
 @app.delete("/api/cache")

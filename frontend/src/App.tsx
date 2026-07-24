@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, formatUtc, frequency } from './api'
-import type { Observation, Pass, Settings, Target, TransmitterInsight } from './types'
+import type { GroundTrack, GroundTrackPoint, Observation, Pass, Settings, Target, TransmitterInsight } from './types'
 
 type Page = 'dashboard' | 'targets' | 'schedule' | 'observations' | 'receptions' | 'settings'
 type Notify = (message: string, tone?: 'success' | 'error' | 'info') => void
@@ -204,7 +204,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
       <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
-      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl></div><PolarPlot observation={next} now={now} /></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
+      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMap observation={next} /></div><div className="next-polar-panel"><PolarPlot observation={next} now={now} /></div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
     </section>
     <section className="split">
       <div className="panel overview-list"><div className="panel-title"><div><small>NEXT 6</small><h2>Upcoming List</h2></div><div className="button-row"><button className="ghost" disabled={refreshing} onClick={() => refreshTimeline(true).then(() => onNotify('Upcoming timeline refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('observations')}>View all →</button></div></div>{upcomingList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('observations', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{observationDuration(item)} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!upcomingList.length && <div className="empty">No upcoming observations.</div>}</div>
@@ -258,6 +258,79 @@ function observationProgress(item: Observation, now: Date): number {
 function ObservationProgress({ observation, now }: { observation: Observation; now: Date }) {
   const progress = observationProgress(observation, now), live = listeningStatus(observation, now).className === 'live'
   return <div className={`observation-progress ${live ? 'live' : ''}`}><div><small>{live ? 'RECEPTION PROGRESS' : 'OBSERVATION WINDOW'}</small><span>{live ? `${Math.round(progress * 100)}%` : observationDuration(observation)}</span></div><div className="observation-progress-track"><span style={{ width: `${progress * 100}%` }} /></div></div>
+}
+
+const WORLD_MAP_ROWS: Array<[number, string]> = [
+  [7, '77:6 101:12'], [9, '63:54 199:2'], [11, '69:6 81:36 141:2 203:4'],
+  [13, '43:4 59:2 71:2 91:26 171:2 193:18'], [15, '43:2 47:10 63:2 67:12 93:22 169:2 179:4 185:38 231:6'],
+  [17, '15:44 63:4 69:4 77:6 93:20 143:14 173:86'], [19, '3:6 13:60 79:8 93:12 117:2 141:118'],
+  [21, '15:52 81:4 95:6 137:8 147:110'], [23, '13:12 27:36 75:6 99:2 135:8 147:94 245:8'],
+  [25, '19:2 35:30 77:10 127:2 139:4 147:84 243:4'], [27, '37:34 75:14 125:6 137:2 145:84 241:4'],
+  [29, '39:34 75:16 129:2 135:98'], [31, '41:44 89:4 129:102'], [33, '43:42 129:100'],
+  [35, '43:38 129:6 137:4 143:8 159:6 167:60 231:2'], [37, '43:36 125:6 145:20 169:54'],
+  [39, '43:34 125:6 151:16 169:46 221:2 229:2'], [41, '45:32 127:12 157:60 221:2 227:4'],
+  [43, '47:26 125:16 155:62'], [45, '51:16 71:2 123:42 167:50'], [47, '53:8 121:34 157:10 171:46'],
+  [49, '55:6 119:38 159:14 179:36'], [51, '57:4 67:2 119:38 159:14 181:12 197:10 209:2'],
+  [53, '57:12 119:40 161:10 183:8 197:10'], [55, '65:6 119:40 161:6 183:6 201:8'],
+  [57, '69:2 119:44 185:2 201:8'], [59, '77:10 121:46 185:2 205:2'], [61, '75:14 123:44 219:2'],
+  [63, '77:18 137:28 203:2 213:2'], [65, '75:20 137:26 201:4 209:6'], [67, '73:26 137:24 203:2 209:6'],
+  [69, '73:30 139:20 203:4 227:8'], [71, '75:32 141:18 229:6'], [73, '75:30 141:18'],
+  [75, '77:26 141:18 225:2'], [77, '77:26 139:20 165:2 219:10 231:4'], [79, '81:22 139:18 163:4 217:18'],
+  [81, '81:22 141:14 163:2 213:24'], [83, '81:18 141:16 163:2 211:28'], [85, '81:16 141:14 213:26'],
+  [87, '81:14 143:10 213:28'], [89, '81:12 143:8 213:8 225:14'], [91, '79:12 229:10'],
+  [93, '79:10 231:6 255:2'], [95, '79:8 255:2'], [97, '79:6 251:2'], [99, '79:4'], [101, '77:6'],
+  [103, '79:4'], [105, '81:2'], [113, '169:2 203:2'], [115, '83:2 161:18 187:54'],
+  [117, '81:6 123:56 181:70'], [119, '41:8 59:28 119:128'], [121, '25:52 107:140'],
+  [123, '23:54 95:4 107:138'], [125, '21:66 91:158'], [127, '3:256'], [129, '3:256'],
+]
+
+function WorldTrackMap({ observation }: { observation: Observation }) {
+  const now = useClock()
+  const [track, setTrack] = useState<GroundTrack | null>(null), [error, setError] = useState('')
+  useEffect(() => {
+    let canceled = false
+    setTrack(null); setError('')
+    api<GroundTrack>(`/observations/${observation.id}/ground-track`).then(value => { if (!canceled) setTrack(value) }).catch(value => { if (!canceled) setError(String(value)) })
+    return () => { canceled = true }
+  }, [observation.id])
+  const project = (point: Pick<GroundTrackPoint, 'latitude' | 'longitude'>) => ({ x: 1 + ((point.longitude + 180) / 360) * 260, y: 1 + ((90 - point.latitude) / 180) * 132 })
+  const segments = useMemo(() => {
+    if (!track?.points.length) return []
+    const paths: string[][] = [[]]
+    let previous = track.points[0]
+    for (const point of track.points) {
+      if (Math.abs(point.longitude - previous.longitude) > 180) paths.push([])
+      const projected = project(point)
+      paths[paths.length - 1].push(`${paths[paths.length - 1].length ? 'L' : 'M'} ${projected.x.toFixed(1)} ${projected.y.toFixed(1)}`)
+      previous = point
+    }
+    return paths.filter(path => path.length > 1).map(path => path.join(' '))
+  }, [track])
+  const livePoint = useMemo(() => {
+    if (!track?.points.length) return track?.current ?? null
+    const nowMs = now.getTime()
+    let previous = track.points[0]
+    for (const next of track.points.slice(1)) {
+      const previousMs = new Date(previous.time).getTime(), nextMs = new Date(next.time).getTime()
+      if (Number.isFinite(previousMs) && Number.isFinite(nextMs) && nowMs >= previousMs && nowMs <= nextMs && nextMs > previousMs) {
+        const ratio = (nowMs - previousMs) / (nextMs - previousMs)
+        let longitude = next.longitude
+        if (longitude - previous.longitude > 180) longitude -= 360
+        if (previous.longitude - longitude > 180) longitude += 360
+        longitude = previous.longitude + (longitude - previous.longitude) * ratio
+        longitude = ((longitude + 540) % 360) - 180
+        return {
+          time: now.toISOString(),
+          latitude: previous.latitude + (next.latitude - previous.latitude) * ratio,
+          longitude,
+        }
+      }
+      previous = next
+    }
+    return nowMs < new Date(track.points[0].time).getTime() ? track.points[0] : track.points[track.points.length - 1]
+  }, [track, now])
+  const current = livePoint ? project(livePoint) : null, station = track?.station ? project(track.station) : null
+  return <div className="world-map-wrap"><div className="panel-title"><div><small>WORLD REFERENCE</small><h2>Ground track</h2></div>{livePoint && <span className="timeline-count">{livePoint.latitude.toFixed(2)}°, {livePoint.longitude.toFixed(2)}°</span>}</div><div className="world-map-frame">{track ? <svg className="world-map" viewBox="0 0 262 134" role="img" aria-label={`World map showing ${observationSatellite(observation)} ground track and station position`}><rect className="world-ocean" x="0" y="0" width="262" height="134" /><rect className="world-border" x="1" y="1" width="260" height="132" />{[-120, -60, 0, 60, 120].map(lon => { const x = 1 + ((lon + 180) / 360) * 260; return <line className="world-grid" key={`lon-${lon}`} x1={x} y1="1" x2={x} y2="133" /> })}{[-60, -30, 0, 30, 60].map(lat => { const y = 1 + ((90 - lat) / 180) * 132; return <line className="world-grid" key={`lat-${lat}`} x1="1" y1={y} x2="261" y2={y} /> })}<g className="world-pixel-land">{WORLD_MAP_ROWS.map(([y, row]) => row.split(' ').map((cell, index) => { const [x, width] = cell.split(':').map(Number); return <rect key={`${y}-${index}`} x={x} y={y} width={width} height="2" /> }))}</g>{segments.map((path, index) => <path className="world-track" key={index} d={path} />)}{station && <g className="world-station"><circle cx={station.x} cy={station.y} r="1.7" /><path d={`M ${station.x - 3} ${station.y} L ${station.x + 3} ${station.y} M ${station.x} ${station.y - 3} L ${station.x} ${station.y + 3}`} /></g>}{current && <g className="world-satellite"><circle className="world-satellite-pulse" cx={current.x} cy={current.y} r="4" /><circle cx={current.x} cy={current.y} r="2.1" /></g>}</svg> : <div className="catalog-loading">{error ? `Ground track unavailable: ${error}` : <><span className="spinner" /> Loading ground track…</>}</div>}</div><div className="world-map-legend"><span><i className="satellite" />Satellite now</span><span><i className="track" />Ground track</span><span><i className="station" />Station</span></div></div>
 }
 
 function PolarPlot({ observation, now }: { observation: Observation; now?: Date }) {
@@ -573,7 +646,7 @@ function ObservationDetail({ observationId, routePage, previousId, nextId, onBac
   const metadata = observationMetadata(item), radio = metadata?.radio, parameters = radio?.parameters || {}, demoddata = item.demoddata || []
   return <div className="page observation-detail"><PageHeader eyebrow={`${detailLabel} / #${item.id}`} title={observationSatellite(item)} action={detailActions} />
     <section className="observation-detail-hero"><div><span className={`observation-status ${item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'finished'}`}>{item.vetted_status || item.status || 'unknown'}</span><strong>{formatUtc(item.start)}</strong><small>{formatUtc(item.end)} · {observationDuration(item)}</small></div><div><small>TRANSMITTER</small><strong>{item.transmitter_description || item.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(item))} · {item.transmitter_mode || 'Unknown mode'}{item.transmitter_baud ? ` · ${item.transmitter_baud.toLocaleString()} baud` : ''}</span></div><div><small>GROUND STATION</small><strong>{item.station_name || `Station ${item.ground_station || '—'}`}</strong><span>{item.station_lat ?? '—'}, {item.station_lng ?? '—'} · {item.station_alt ?? '—'} m</span></div></section>
-    {future ? <section className="panel upcoming-detail-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></section> : <><section className="reception-media-grid"><div className="panel reception-audio"><div className="panel-title"><div><small>AUDIO RECORDING</small><h2>Listen</h2></div></div>{item.payload ? <audio controls preload="metadata" src={item.payload} /> : <p className="muted">No audio was uploaded.</p>}</div><div className="panel reception-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div></section><section className="panel waterfall-panel"><div className="panel-title"><div><small>SPECTRUM</small><h2>Full-size waterfall</h2></div>{item.waterfall && <a href={item.waterfall} target="_blank" rel="noreferrer">Open original / zoom ↗</a>}</div>{item.waterfall ? <a className="waterfall-image-link" href={item.waterfall} target="_blank" rel="noreferrer" title="Open the original image for browser zoom and panning"><img src={item.waterfall} alt={`Waterfall for observation ${item.id}`} loading="lazy" /></a> : <div className="empty">No waterfall was uploaded.</div>}</section></>}
+    {future ? <section className="upcoming-detail-tracks"><div className="panel upcoming-detail-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div><div className="panel upcoming-detail-map"><WorldTrackMap observation={item} /></div></section> : <><section className="reception-media-grid"><div className="panel reception-audio"><div className="panel-title"><div><small>AUDIO RECORDING</small><h2>Listen</h2></div></div>{item.payload ? <audio controls preload="metadata" src={item.payload} /> : <p className="muted">No audio was uploaded.</p>}</div><div className="panel reception-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div></section><section className="panel waterfall-panel"><div className="panel-title"><div><small>SPECTRUM</small><h2>Full-size waterfall</h2></div>{item.waterfall && <a href={item.waterfall} target="_blank" rel="noreferrer">Open original / zoom ↗</a>}</div>{item.waterfall ? <a className="waterfall-image-link" href={item.waterfall} target="_blank" rel="noreferrer" title="Open the original image for browser zoom and panning"><img src={item.waterfall} alt={`Waterfall for observation ${item.id}`} loading="lazy" /></a> : <div className="empty">No waterfall was uploaded.</div>}</section></>}
     <section className="split reception-details"><div className="panel"><div className="panel-title"><div><small>PASS GEOMETRY</small><h2>Observation data</h2></div></div><dl className="detail-facts"><dt>Maximum elevation</dt><dd>{degrees(item.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(item.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(item.set_azimuth)}</dd><dt>NORAD catalog ID</dt><dd>{item.norad_cat_id || '—'}</dd><dt>SatNOGS satellite ID</dt><dd>{item.sat_id || '—'}</dd><dt>Observer</dt><dd>{item.observer || '—'}</dd><dt>Client version</dt><dd>{item.client_version || '—'}</dd><dt>Radio</dt><dd>{radio?.name || '—'}{radio?.version ? ` ${radio.version}` : ''}</dd><dt>Receiver gain</dt><dd>{parameters.gain ? `${parameters.gain} dB` : '—'}</dd><dt>Sample rate</dt><dd>{parameters['samp-rate-rx'] || '—'}</dd></dl></div><div className="panel"><div className="panel-title"><div><small>ORBITAL ELEMENTS</small><h2>TLE used for observation</h2></div><span className="muted">{item.tle_source || 'Unknown source'}</span></div><pre className="tle-block">{[item.tle0, item.tle1, item.tle2].filter(Boolean).join('\n') || 'No TLE available.'}</pre>{!future && <><div className="detail-assets"><a className={`ghost button-link ${item.payload ? '' : 'disabled'}`} href={item.payload || undefined} target="_blank" rel="noreferrer">Audio file</a><a className={`ghost button-link ${item.archive_url ? '' : 'disabled'}`} href={item.archive_url || undefined} target="_blank" rel="noreferrer">Archive</a></div>{demoddata.length > 0 && <div className="demod-list"><small>DECODED DATA</small>{demoddata.map((entry, index) => { const url = typeof entry === 'string' ? entry : entry.url; return url ? <a key={url} href={url} target="_blank" rel="noreferrer">{typeof entry === 'string' ? `Frame ${index + 1}` : entry.name || `Frame ${index + 1}`}</a> : null })}</div>}</>}</div></section>
   </div>
 }

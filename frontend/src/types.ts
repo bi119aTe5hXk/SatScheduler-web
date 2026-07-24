@@ -120,3 +120,17 @@ export type Observation = {
   client_version?: string
   client_metadata?: string | Record<string, any>
 }
+
+export type GroundTrackPoint = {
+  time: string
+  latitude: number
+  longitude: number
+}
+
+export type GroundTrack = {
+  observation_id?: number
+  satellite_name?: string
+  current: GroundTrackPoint
+  points: GroundTrackPoint[]
+  station?: { latitude: number; longitude: number } | null
+}
