@@ -4,6 +4,7 @@ import type { Observation, Pass, Settings, Target, TransmitterInsight } from './
 
 type Page = 'dashboard' | 'targets' | 'schedule' | 'observations' | 'receptions' | 'settings'
 type Notify = (message: string, tone?: 'success' | 'error' | 'info') => void
+type RouteState = { page: Page; observationId: number | null }
 
 const NAV: Array<{ id: Page; label: string; mark: string }> = [
   { id: 'dashboard', label: 'Overview', mark: 'OV' },
@@ -22,6 +23,40 @@ const defaultSettings: Settings = {
   api_request_interval_seconds: 4, retry_individually: true, conflict_buffer_seconds: 300,
 }
 
+const PAGE_PATHS: Record<Page, string> = {
+  dashboard: '/',
+  targets: '/satellites',
+  schedule: '/schedule',
+  observations: '/upcoming',
+  receptions: '/receptions',
+  settings: '/settings',
+}
+
+function routePath(page: Page, observationId?: number | null): string {
+  const base = PAGE_PATHS[page]
+  return observationId && (page === 'observations' || page === 'receptions') ? `${base}/${observationId}` : base
+}
+
+function parseRoute(pathname = window.location.pathname): RouteState {
+  const [section = '', id] = pathname.replace(/^\/+|\/+$/g, '').split('/')
+  const observationId = id && /^\d+$/.test(id) ? Number(id) : null
+  if (section === 'upcoming' || section === 'observations') return { page: 'observations', observationId }
+  if (section === 'receptions') return { page: 'receptions', observationId }
+  if (section === 'satellites' || section === 'targets') return { page: 'targets', observationId: null }
+  if (section === 'schedule') return { page: 'schedule', observationId: null }
+  if (section === 'settings') return { page: 'settings', observationId: null }
+  return { page: 'dashboard', observationId: null }
+}
+
+function observationRoutePage(item: Observation, now = Date.now()): 'observations' | 'receptions' {
+  const status = String(item.status || '').toLocaleLowerCase()
+  const vetted = String(item.vetted_status || '').toLocaleLowerCase()
+  if (status === 'future') return 'observations'
+  if (['good', 'bad', 'unknown', 'failed', 'fail'].includes(vetted) || ['good', 'bad', 'unknown', 'failed', 'fail'].includes(status)) return 'receptions'
+  const end = new Date(item.end || item.start || 0).getTime()
+  return Number.isFinite(end) && end > now ? 'observations' : 'receptions'
+}
+
 function activeUpcoming(items: Observation[], now = Date.now()): Observation[] {
   return items.filter(item => {
     const end = new Date(item.end || item.start || 0).getTime()
@@ -37,8 +72,8 @@ function useClock() {
 
 export default function App() {
   const now = useClock()
-  const [page, setPage] = useState<Page>('dashboard')
-  const [observationDetail, setObservationDetail] = useState<{ page: 'observations' | 'receptions'; id: number } | null>(null)
+  const [route, setRoute] = useState<RouteState>(() => parseRoute())
+  const page = route.page
   const [config, setConfig] = useState<any>(null)
   const [targets, setTargets] = useState<Target[]>([])
   const [settings, setSettings] = useState<Settings>(defaultSettings)
@@ -46,6 +81,11 @@ export default function App() {
   const notify = (message: string, tone: 'success' | 'error' | 'info' = 'error') => setNotice({ message, tone })
   useEffect(() => {
     try { localStorage.removeItem('satscheduler-observation-cache-v1') } catch { /* legacy cache cleanup only */ }
+  }, [])
+  useEffect(() => {
+    const onPopState = () => setRoute(parseRoute())
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
   }, [])
   useEffect(() => {
     if (!notice) return
@@ -62,9 +102,14 @@ export default function App() {
     } catch (error) { notify(String(error)) }
   }
   useEffect(() => { reload() }, [])
-  const navigate = (destination: Page, observationId?: number) => {
-    setPage(destination)
-    setObservationDetail(observationId && (destination === 'observations' || destination === 'receptions') ? { page: destination, id: observationId } : null)
+  const navigate = (destination: Page, observationId?: number | null, replace = false) => {
+    const nextRoute = { page: destination, observationId: observationId && (destination === 'observations' || destination === 'receptions') ? observationId : null }
+    const nextPath = routePath(nextRoute.page, nextRoute.observationId)
+    setRoute(nextRoute)
+    if (window.location.pathname !== nextPath) {
+      if (replace) window.history.replaceState(null, '', nextPath)
+      else window.history.pushState(null, '', nextPath)
+    }
   }
 
   return <div className="app-shell">
@@ -83,8 +128,8 @@ export default function App() {
       {page === 'dashboard' && <Dashboard config={config} targets={targets} onNavigate={navigate} onNotify={notify} />}
       {page === 'targets' && <Targets targets={targets} onChanged={reload} onNotify={notify} />}
       {page === 'schedule' && <Schedule settings={settings} targets={targets} onNotify={notify} />}
-      {page === 'observations' && <ObservationList future title="Upcoming observations" targets={targets} initialSelected={observationDetail?.page === 'observations' ? observationDetail.id : null} onNotify={notify} />}
-      {page === 'receptions' && <ObservationList future={false} title="Reception archive" targets={targets} initialSelected={observationDetail?.page === 'receptions' ? observationDetail.id : null} onNotify={notify} />}
+      {page === 'observations' && <ObservationList future title="Upcoming observations" targets={targets} selectedId={route.observationId} onNavigate={navigate} onNotify={notify} />}
+      {page === 'receptions' && <ObservationList future={false} title="Reception archive" targets={targets} selectedId={route.observationId} onNavigate={navigate} onNotify={notify} />}
       {page === 'settings' && <SettingsPage value={settings} config={config} onSaved={reload} onNotify={notify} />}
     </main>
   </div>
@@ -425,9 +470,9 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
   return <section className="panel job-progress"><div className="job-progress-heading"><span className="spinner" /><div><small>{label} · {String(job.stage || 'working').replaceAll('_', ' ')}</small><strong>{job.message || 'Working in the background…'}</strong></div>{current != null && <span>{current}{total ? ` / ${total}` : ''}</span>}{action}</div><div className={`job-progress-bar ${percentage == null ? 'indeterminate' : ''}`}><span style={percentage == null ? undefined : { width: `${percentage}%` }} /></div>{progress.records != null && <small>{progress.records} records loaded</small>}<p>Safe to leave this page. The task continues on the server.</p></section>
 }
 
-function ObservationList({ future, title, targets, initialSelected, onNotify }: { future: boolean; title: string; targets: Target[]; initialSelected: number | null; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
+function ObservationList({ future, title, targets, selectedId, onNavigate, onNotify }: { future: boolean; title: string; targets: Target[]; selectedId: number | null; onNavigate: (page: Page, observationId?: number | null, replace?: boolean) => void; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
   const now = useClock()
-  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false), [selected, setSelected] = useState<number | null>(initialSelected)
+  const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false)
   const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [progress, setProgress] = useState({ page: 0, records: 0 })
@@ -492,33 +537,41 @@ function ObservationList({ future, title, targets, initialSelected, onNotify }: 
     finally { setLoading(false) }
   }
   useEffect(() => {
-    setItems([]); setCursor(null); setProgress({ page: 0, records: 0 }); setSelected(initialSelected)
+    setItems([]); setCursor(null); setProgress({ page: 0, records: 0 })
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
     return () => { request.current?.abort(); if (serverRefreshPollTimer.current) window.clearTimeout(serverRefreshPollTimer.current) }
   }, [future])
-  useEffect(() => { setSelected(initialSelected) }, [initialSelected])
-  if (selected != null) return <ObservationDetail observationId={selected} future={future} onBack={() => setSelected(null)} />
   const receptionStatus = (item: Observation): 'good' | 'bad' | 'unknown' => item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'unknown'
   const statusCounts = items.reduce((counts, item) => { counts[receptionStatus(item)] += 1; return counts }, { good: 0, bad: 0, unknown: 0 })
   const statusFilteredItems = future ? activeUpcoming(items, now.getTime()) : receptionFilter === 'all' ? items : items.filter(item => receptionStatus(item) === receptionFilter)
   const visibleItems = future ? statusFilteredItems : statusFilteredItems.filter(item => observationMatches(item, searchQuery, targets))
+  if (selectedId != null) {
+    const selectedIndex = visibleItems.findIndex(item => item.id === selectedId)
+    const previousId = selectedIndex > 0 ? visibleItems[selectedIndex - 1].id : null
+    const nextId = selectedIndex >= 0 && selectedIndex < visibleItems.length - 1 ? visibleItems[selectedIndex + 1].id : null
+    const currentPage = future ? 'observations' : 'receptions'
+    return <ObservationDetail observationId={selectedId} routePage={currentPage} previousId={previousId} nextId={nextId} onBack={() => onNavigate(currentPage)} onNavigate={(page, id, replace) => onNavigate(page, id, replace)} />
+  }
   return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => future ? loadUpcoming(true) : loadReceptionPage(true, true)}>{loading ? (future ? 'Restart refresh' : 'Refreshing…') : 'Refresh'}</button>} />
     {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{visibleItems.length} observations</span></div><Timeline observations={visibleItems} now={now} /></section>}
     {future && loading && <div className="fetch-progress"><span className="spinner" /><div><strong>{progress.page ? `Fetching page ${progress.page + 1}…` : 'Starting background update…'}</strong><small>{progress.page} page{progress.page === 1 ? '' : 's'} · {progress.records} observations loaded</small></div></div>}
     {!future && <><section className="reception-search"><label>Search loaded receptions<input type="search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Observation ID, satellite, alias, SatNOGS/NORAD ID, mode, frequency or observer" /></label>{searchQuery && <button className="ghost" onClick={() => setSearchQuery('')}>Clear</button>}<span>{visibleItems.length} matches</span></section><section className="reception-filters" aria-label="Reception status filter"><span>STATUS</span>{(['all', 'good', 'bad', 'unknown'] as const).map(status => <button key={status} className={receptionFilter === status ? 'active' : ''} onClick={() => setReceptionFilter(status)}>{status}<strong>{status === 'all' ? items.length : statusCounts[status]}</strong></button>)}<small>Filters apply locally to the {items.length} loaded records.</small></section></>}
-    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => setSelected(item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">{!future && searchQuery ? 'No loaded receptions match this search.' : !future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
+    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => onNavigate(future ? 'observations' : 'receptions', item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">{!future && searchQuery ? 'No loaded receptions match this search.' : !future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
     {!future && cursor && <button className="load-more" onClick={() => loadReceptionPage()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}
   </div>
 }
 
-function ObservationDetail({ observationId, future, onBack }: { observationId: number; future: boolean; onBack: () => void }) {
+function ObservationDetail({ observationId, routePage, previousId, nextId, onBack, onNavigate }: { observationId: number; routePage: 'observations' | 'receptions'; previousId: number | null; nextId: number | null; onBack: () => void; onNavigate: (page: Page, observationId?: number | null, replace?: boolean) => void }) {
   const [item, setItem] = useState<Observation | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState('')
-  useEffect(() => { setLoading(true); api<Observation>(`/observations/${observationId}`).then(setItem).catch(e => setError(String(e))).finally(() => setLoading(false)) }, [observationId])
+  useEffect(() => { setLoading(true); setError(''); api<Observation>(`/observations/${observationId}`).then(value => { setItem(value); const resolvedPage = observationRoutePage(value); if (resolvedPage !== routePage) onNavigate(resolvedPage, observationId, true) }).catch(e => { setItem(null); setError(String(e)) }).finally(() => setLoading(false)) }, [observationId, routePage])
+  const resolvedPage = item ? observationRoutePage(item) : routePage
+  const future = resolvedPage === 'observations'
   const detailLabel = future ? 'UPCOMING DETAIL' : 'RECEPTION DETAIL'
-  if (loading) return <div className="page"><PageHeader eyebrow={detailLabel} title={`Observation #${observationId}`} action={<button className="ghost" onClick={onBack}>← Back</button>} /><div className="panel catalog-loading"><span className="spinner" /> Loading observation detail…</div></div>
-  if (!item || error) return <div className="page"><PageHeader eyebrow={detailLabel} title={`Observation #${observationId}`} action={<button className="ghost" onClick={onBack}>← Back</button>} /><div className="panel empty">{error || 'Observation not found.'}</div></div>
+  const detailActions = <div className="button-row"><button className="ghost" onClick={onBack}>← Back</button><button className="ghost" disabled={!previousId} onClick={() => previousId && onNavigate(resolvedPage, previousId)}>← Previous</button><button className="ghost" disabled={!nextId} onClick={() => nextId && onNavigate(resolvedPage, nextId)}>Next →</button>{!loading && item && <a className="ghost button-link" href={`https://network.satnogs.org/observations/${item.id}/`} target="_blank" rel="noreferrer">Open SatNOGS ↗</a>}</div>
+  if (loading) return <div className="page"><PageHeader eyebrow={detailLabel} title={`Observation #${observationId}`} action={detailActions} /><div className="panel catalog-loading"><span className="spinner" /> Loading observation detail…</div></div>
+  if (!item || error) return <div className="page"><PageHeader eyebrow={detailLabel} title={`Observation #${observationId}`} action={detailActions} /><div className="panel empty">{error || 'Observation not found.'}</div></div>
   const metadata = observationMetadata(item), radio = metadata?.radio, parameters = radio?.parameters || {}, demoddata = item.demoddata || []
-  return <div className="page observation-detail"><PageHeader eyebrow={`${detailLabel} / #${item.id}`} title={observationSatellite(item)} action={<div className="button-row"><button className="ghost" onClick={onBack}>← Back</button><a className="ghost button-link" href={`https://network.satnogs.org/observations/${item.id}/`} target="_blank" rel="noreferrer">Open SatNOGS ↗</a></div>} />
+  return <div className="page observation-detail"><PageHeader eyebrow={`${detailLabel} / #${item.id}`} title={observationSatellite(item)} action={detailActions} />
     <section className="observation-detail-hero"><div><span className={`observation-status ${item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'finished'}`}>{item.vetted_status || item.status || 'unknown'}</span><strong>{formatUtc(item.start)}</strong><small>{formatUtc(item.end)} · {observationDuration(item)}</small></div><div><small>TRANSMITTER</small><strong>{item.transmitter_description || item.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(item))} · {item.transmitter_mode || 'Unknown mode'}{item.transmitter_baud ? ` · ${item.transmitter_baud.toLocaleString()} baud` : ''}</span></div><div><small>GROUND STATION</small><strong>{item.station_name || `Station ${item.ground_station || '—'}`}</strong><span>{item.station_lat ?? '—'}, {item.station_lng ?? '—'} · {item.station_alt ?? '—'} m</span></div></section>
     {future ? <section className="panel upcoming-detail-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></section> : <><section className="reception-media-grid"><div className="panel reception-audio"><div className="panel-title"><div><small>AUDIO RECORDING</small><h2>Listen</h2></div></div>{item.payload ? <audio controls preload="metadata" src={item.payload} /> : <p className="muted">No audio was uploaded.</p>}</div><div className="panel reception-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div></section><section className="panel waterfall-panel"><div className="panel-title"><div><small>SPECTRUM</small><h2>Full-size waterfall</h2></div>{item.waterfall && <a href={item.waterfall} target="_blank" rel="noreferrer">Open original / zoom ↗</a>}</div>{item.waterfall ? <a className="waterfall-image-link" href={item.waterfall} target="_blank" rel="noreferrer" title="Open the original image for browser zoom and panning"><img src={item.waterfall} alt={`Waterfall for observation ${item.id}`} loading="lazy" /></a> : <div className="empty">No waterfall was uploaded.</div>}</section></>}
     <section className="split reception-details"><div className="panel"><div className="panel-title"><div><small>PASS GEOMETRY</small><h2>Observation data</h2></div></div><dl className="detail-facts"><dt>Maximum elevation</dt><dd>{degrees(item.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(item.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(item.set_azimuth)}</dd><dt>NORAD catalog ID</dt><dd>{item.norad_cat_id || '—'}</dd><dt>SatNOGS satellite ID</dt><dd>{item.sat_id || '—'}</dd><dt>Observer</dt><dd>{item.observer || '—'}</dd><dt>Client version</dt><dd>{item.client_version || '—'}</dd><dt>Radio</dt><dd>{radio?.name || '—'}{radio?.version ? ` ${radio.version}` : ''}</dd><dt>Receiver gain</dt><dd>{parameters.gain ? `${parameters.gain} dB` : '—'}</dd><dt>Sample rate</dt><dd>{parameters['samp-rate-rx'] || '—'}</dd></dl></div><div className="panel"><div className="panel-title"><div><small>ORBITAL ELEMENTS</small><h2>TLE used for observation</h2></div><span className="muted">{item.tle_source || 'Unknown source'}</span></div><pre className="tle-block">{[item.tle0, item.tle1, item.tle2].filter(Boolean).join('\n') || 'No TLE available.'}</pre>{!future && <><div className="detail-assets"><a className={`ghost button-link ${item.payload ? '' : 'disabled'}`} href={item.payload || undefined} target="_blank" rel="noreferrer">Audio file</a><a className={`ghost button-link ${item.archive_url ? '' : 'disabled'}`} href={item.archive_url || undefined} target="_blank" rel="noreferrer">Archive</a></div>{demoddata.length > 0 && <div className="demod-list"><small>DECODED DATA</small>{demoddata.map((entry, index) => { const url = typeof entry === 'string' ? entry : entry.url; return url ? <a key={url} href={url} target="_blank" rel="noreferrer">{typeof entry === 'string' ? `Frame ${index + 1}` : entry.name || `Frame ${index + 1}`}</a> : null })}</div>}</>}</div></section>

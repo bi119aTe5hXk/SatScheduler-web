@@ -46,6 +46,9 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 - Cursor-paginated Reception archive with loaded-record Good/Bad/Unknown filtering.
 - Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
   polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
+- URL-addressable lists and details: `/upcoming`, `/upcoming/<observation-id>`,
+  `/receptions`, and `/receptions/<observation-id>`. Direct ID views fetch the SatNOGS detail
+  temporarily and classify it as Upcoming or Reception from its current status.
 - Persistent one-hour caches for satellite, transmitter, TLE, station, Upcoming and Reception lists.
 - A fixed UTC reference clock across every desktop and mobile page, conditional automatic-job
   settings, and full-width Reception waterfalls with separate Audio and Polar Plot panels.
