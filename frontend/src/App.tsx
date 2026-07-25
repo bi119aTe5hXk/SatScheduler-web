@@ -291,7 +291,7 @@ function Dashboard({ config, settings, targets, onNavigate, onNotify }: { config
       <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
-      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMapView observation={next} track={nextTrack.track} error={nextTrack.error} /></div><div className="next-polar-panel"><PolarPlot observation={next} now={now} />{settings.overview_globe_enabled && <GlobeTrackMap observation={next} track={nextTrack.track} error={nextTrack.error} />}</div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
+      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMapView observation={next} track={nextTrack.track} error={nextTrack.error} /></div><div className="next-polar-panel"><PolarPlot observation={next} now={now} />{settings.overview_globe_enabled && <GlobeTrackMap key={next.id} observation={next} track={nextTrack.track} error={nextTrack.error} />}</div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
     </section>
     <section className="split">
       <div className="panel overview-list"><div className="panel-title"><div><small>NEXT 6</small><h2>Upcoming List</h2></div><div className="button-row"><button className="ghost" disabled={refreshing} onClick={() => refreshTimeline(true).then(() => onNotify('Upcoming timeline refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('observations')}>View all →</button></div></div>{upcomingList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('observations', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{observationDuration(item)} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!upcomingList.length && <div className="empty">No upcoming observations.</div>}</div>
@@ -483,19 +483,19 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
   const [globeScale, setGlobeScale] = useState(1.22)
   const [globeViewAngle, setGlobeViewAngle] = useState(0.12)
   const [globeError, setGlobeError] = useState('')
-  const removeSatellite = () => {
+  const removeSatellite = (owner = globe.current) => {
     const current = satellite.current
     if (!current) return
     try { current.remove() } catch { /* old library cleanup is best-effort */ }
-    if (globe.current && current.mesh) {
-      try { globe.current.scene?.remove(current.mesh) } catch { /* old library cleanup is best-effort */ }
+    if (owner && current.mesh) {
+      try { owner.scene?.remove(current.mesh) } catch { /* old library cleanup is best-effort */ }
     }
-    if (globe.current?.satellites && current.toString) {
-      try { delete globe.current.satellites[current.toString()] } catch { /* old library cleanup is best-effort */ }
+    if (owner?.satellites && current.toString) {
+      try { delete owner.satellites[current.toString()] } catch { /* old library cleanup is best-effort */ }
     }
-    if (globe.current?.satellites) {
-      for (const [key, value] of Object.entries(globe.current.satellites)) {
-        if (value === current) delete globe.current.satellites[key]
+    if (owner?.satellites) {
+      for (const [key, value] of Object.entries(owner.satellites)) {
+        if (value === current) delete owner.satellites[key]
       }
     }
     satellite.current = null
@@ -508,6 +508,7 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
     element.replaceChildren()
     const width = Math.max(280, Math.floor(element.clientWidth || 320))
     const height = Math.max(280, Math.min(360, width))
+    let instance: EncomGlobeInstance | null = null
     let observer: ResizeObserver | null = null
     const start = async () => {
       try {
@@ -517,7 +518,7 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
         ])
         if (destroyed) return
         const grid = parseEncomGrid(gridSource)
-        const instance = new Constructor(width, height, {
+        instance = new Constructor(width, height, {
           font: 'DM Mono',
           data: [],
           tiles: grid.tiles,
@@ -538,22 +539,30 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
         element.appendChild(instance.domElement)
         const animate = () => {
           if (destroyed) return
-          if (!document.hidden) instance.tick()
+          try {
+            if (!document.hidden) instance?.tick()
+          } catch (value) {
+            destroyed = true
+            setGlobeError(String(value))
+            return
+          }
           animation.current = window.requestAnimationFrame(animate)
         }
         instance.init(() => {
-          if (destroyed) return
+          if (destroyed || !instance) return
           if (track.station) instance.addPin(track.station.latitude, track.station.longitude, 'Station')
           if (livePoint && !satellite.current) satellite.current = addEncomSatellite(instance, livePoint)
           animate()
         })
         const resize = () => {
+          const currentInstance = instance
+          if (!currentInstance) return
           const nextWidth = Math.max(280, Math.floor(element.clientWidth || width))
           const nextHeight = Math.max(280, Math.min(360, nextWidth))
-          if (instance.camera && instance.renderer) {
-            instance.camera.aspect = nextWidth / nextHeight
-            instance.camera.updateProjectionMatrix()
-            instance.renderer.setSize(nextWidth, nextHeight)
+          if (currentInstance.camera && currentInstance.renderer) {
+            currentInstance.camera.aspect = nextWidth / nextHeight
+            currentInstance.camera.updateProjectionMatrix()
+            currentInstance.renderer.setSize(nextWidth, nextHeight)
           }
         }
         observer = new ResizeObserver(resize)
@@ -568,12 +577,16 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
       observer?.disconnect()
       if (animation.current) window.cancelAnimationFrame(animation.current)
       animation.current = null
-      removeSatellite()
-      if (globe.current) {
-        try { globe.current.destroy() } catch { /* old library cleanup is best-effort */ }
+      removeSatellite(instance)
+      if (instance) {
+        try { instance.destroy() } catch { /* old library cleanup is best-effort */ }
+        if (instance.domElement.parentElement === element) {
+          try { element.removeChild(instance.domElement) } catch { /* old library cleanup is best-effort */ }
+        }
+      }
+      if (globe.current === instance) {
         globe.current = null
       }
-      element.replaceChildren()
     }
   }, [observation.id, track])
   useEffect(() => {
