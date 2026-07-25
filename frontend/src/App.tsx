@@ -80,6 +80,10 @@ function addEncomSatellite(globe: EncomGlobeInstance, point: GroundTrackPoint): 
   })
 }
 
+function globeFrameHeight(element: HTMLElement, width: number): number {
+  return Math.max(150, Math.floor(element.clientHeight || width * 67 / 131))
+}
+
 function loadEncomGlobe(): Promise<EncomGlobeConstructor> {
   if (encomScriptPromise) return encomScriptPromise
   encomScriptPromise = import('encom-globe/build/encom-globe.js?raw').then(({ default: source }) => {
@@ -291,7 +295,7 @@ function Dashboard({ config, settings, targets, onNavigate, onNotify }: { config
       <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
-      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMapView observation={next} track={nextTrack.track} error={nextTrack.error} /></div><div className="next-polar-panel"><PolarPlot observation={next} now={now} />{settings.overview_globe_enabled && <GlobeTrackMap key={next.id} observation={next} track={nextTrack.track} error={nextTrack.error} />}</div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
+      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMapView observation={next} track={nextTrack.track} error={nextTrack.error} /></div><div className="next-polar-panel"><div className="next-polar-card"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={next} now={now} /></div>{settings.overview_globe_enabled && <GlobeTrackMap key={next.id} observation={next} track={nextTrack.track} error={nextTrack.error} />}</div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
     </section>
     <section className="split">
       <div className="panel overview-list"><div className="panel-title"><div><small>NEXT 6</small><h2>Upcoming List</h2></div><div className="button-row"><button className="ghost" disabled={refreshing} onClick={() => refreshTimeline(true).then(() => onNotify('Upcoming timeline refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('observations')}>View all →</button></div></div>{upcomingList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('observations', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{observationDuration(item)} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!upcomingList.length && <div className="empty">No upcoming observations.</div>}</div>
@@ -507,7 +511,7 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
     const element = container.current
     element.replaceChildren()
     const width = Math.max(280, Math.floor(element.clientWidth || 320))
-    const height = Math.max(280, Math.min(360, width))
+    const height = globeFrameHeight(element, width)
     let instance: EncomGlobeInstance | null = null
     let observer: ResizeObserver | null = null
     const start = async () => {
@@ -558,7 +562,7 @@ function GlobeTrackMap({ observation, track, error }: { observation: Observation
           const currentInstance = instance
           if (!currentInstance) return
           const nextWidth = Math.max(280, Math.floor(element.clientWidth || width))
-          const nextHeight = Math.max(280, Math.min(360, nextWidth))
+          const nextHeight = globeFrameHeight(element, nextWidth)
           if (currentInstance.camera && currentInstance.renderer) {
             currentInstance.camera.aspect = nextWidth / nextHeight
             currentInstance.camera.updateProjectionMatrix()
