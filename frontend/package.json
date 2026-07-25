@@ -11,10 +11,11 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.3",
-    "vite": "8.1.4",
-    "typescript": "7.0.2",
+    "encom-globe": "0.5.4",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "typescript": "7.0.2",
+    "vite": "8.1.4"
   },
   "devDependencies": {
     "@types/react": "19.2.17",

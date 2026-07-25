@@ -58,6 +58,7 @@ export type Settings = {
   interval_hours: number
   upcoming_auto_refresh_enabled: boolean
   upcoming_auto_refresh_hours: number
+  overview_globe_enabled: boolean
   horizon_hours: number
   lead_minutes: number
   satellites_per_run: number

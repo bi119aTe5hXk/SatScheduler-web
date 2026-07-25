@@ -5,6 +5,31 @@ import type { GroundTrack, GroundTrackPoint, Observation, Pass, Settings, Target
 type Page = 'dashboard' | 'targets' | 'schedule' | 'observations' | 'receptions' | 'settings'
 type Notify = (message: string, tone?: 'success' | 'error' | 'info') => void
 type RouteState = { page: Page; observationId: number | null }
+type EncomGlobeInstance = {
+  domElement: HTMLCanvasElement
+  camera?: { aspect: number; updateProjectionMatrix: () => void }
+  renderer?: { setSize: (width: number, height: number) => void }
+  scene?: { remove: (value: unknown) => void }
+  satellites?: Record<string, unknown>
+  viewAngle?: number
+  setScale?: (scale: number) => void
+  init: (callback: () => void) => void
+  tick: () => void
+  destroy: (callback?: () => void) => void
+  addMarker: (latitude: number, longitude: number, label: string, connected?: boolean | object) => { remove?: () => void }
+  addPin: (latitude: number, longitude: number, label: string) => { remove?: () => void }
+  addSatellite: (latitude: number, longitude: number, altitude: number, options?: Record<string, unknown>) => EncomSatellite
+}
+type EncomSatelliteMesh = {
+  lon?: number
+  tiltMultiplier?: number
+  tiltDirection?: number
+  position?: { set: (x: number, y: number, z: number) => void }
+  rotation?: { z: number; y: number }
+}
+type EncomSatellite = { remove: () => void; mesh?: EncomSatelliteMesh; toString?: () => string }
+type EncomGlobeConstructor = new (width: number, height: number, options: Record<string, unknown>) => EncomGlobeInstance
+type EncomWindow = Window & { ENCOM?: { Globe?: EncomGlobeConstructor } }
 
 const NAV: Array<{ id: Page; label: string; mark: string }> = [
   { id: 'dashboard', label: 'Overview', mark: 'OV' },
@@ -15,10 +40,71 @@ const NAV: Array<{ id: Page; label: string; mark: string }> = [
   { id: 'settings', label: 'Settings', mark: 'SET' },
 ]
 
+function parseEncomGrid(source: string): { tiles: unknown[] } {
+  const match = source.match(/^var\s+grid\s*=\s*(.*);?\s*$/s)
+  if (!match) return { tiles: [] }
+  try { return JSON.parse(match[1].replace(/;\s*$/, '')) as { tiles: unknown[] } } catch { return { tiles: [] } }
+}
+
+let encomScriptPromise: Promise<EncomGlobeConstructor> | null = null
+
+function encomMapPoint(latitude: number, longitude: number, scale = 500): { x: number; y: number; z: number } {
+  const phi = (90 - latitude) * Math.PI / 180
+  const theta = (180 - longitude) * Math.PI / 180
+  return {
+    x: scale * Math.sin(phi) * Math.cos(theta),
+    y: scale * Math.cos(phi),
+    z: scale * Math.sin(phi) * Math.sin(theta),
+  }
+}
+
+function moveEncomSatellite(satellite: EncomSatellite, latitude: number, longitude: number, altitude: number): void {
+  const mesh = satellite.mesh
+  if (!mesh?.position || !mesh.rotation) return
+  const point = encomMapPoint(latitude, longitude)
+  mesh.lon = longitude
+  mesh.tiltMultiplier = Math.PI / 2 * (1 - Math.abs(latitude / 90))
+  mesh.tiltDirection = latitude > 0 ? -1 : 1
+  mesh.position.set(point.x * altitude, point.y * altitude, point.z * altitude)
+  mesh.rotation.z = -1 * (latitude / 90) * Math.PI / 2
+  mesh.rotation.y = (longitude / 180) * Math.PI
+}
+
+function addEncomSatellite(globe: EncomGlobeInstance, point: GroundTrackPoint): EncomSatellite {
+  return globe.addSatellite(point.latitude, point.longitude, 1.34, {
+    coreColor: '#b5ef62',
+    waveColor: '#ffffff',
+    shieldColor: '#ffffff',
+    numWaves: 8,
+    size: 0.85,
+  })
+}
+
+function loadEncomGlobe(): Promise<EncomGlobeConstructor> {
+  if (encomScriptPromise) return encomScriptPromise
+  encomScriptPromise = import('encom-globe/build/encom-globe.js?raw').then(({ default: source }) => {
+    const currentWindow = window as EncomWindow
+    if (!currentWindow.ENCOM?.Globe) {
+      const script = document.createElement('script')
+      script.text = source.replace(
+        'this.renderer = new THREE.WebGLRenderer( { antialias: true } );',
+        'this.renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } ); this.renderer.setClearColor(0x000000, 0);',
+      )
+      document.head.appendChild(script)
+      script.remove()
+    }
+    const Globe = currentWindow.ENCOM?.Globe
+    if (!Globe) throw new Error('ENCOM Globe failed to initialize.')
+    return Globe
+  })
+  return encomScriptPromise
+}
+
 const defaultSettings: Settings = {
   prediction_engine: 'satnogs_predict', comparison_enabled: false,
   sort_mode: 'list_priority', trigger_mode: 'disabled', daily_time_local: '03:00',
   interval_hours: 6, upcoming_auto_refresh_enabled: false, upcoming_auto_refresh_hours: 6,
+  overview_globe_enabled: true,
   horizon_hours: 48, lead_minutes: 10, satellites_per_run: 15,
   api_request_interval_seconds: 4, retry_individually: true, conflict_buffer_seconds: 300,
 }
@@ -125,7 +211,7 @@ export default function App() {
     <GlobalUtcClock now={now} />
     <main>
       {notice && <button className={`notice ${notice.tone}`} onClick={() => setNotice(null)}>{notice.message}</button>}
-      {page === 'dashboard' && <Dashboard config={config} targets={targets} onNavigate={navigate} onNotify={notify} />}
+      {page === 'dashboard' && <Dashboard config={config} settings={settings} targets={targets} onNavigate={navigate} onNotify={notify} />}
       {page === 'targets' && <Targets targets={targets} onChanged={reload} onNotify={notify} />}
       {page === 'schedule' && <Schedule settings={settings} targets={targets} onNotify={notify} />}
       {page === 'observations' && <ObservationList future title="Upcoming observations" targets={targets} selectedId={route.observationId} onNavigate={navigate} onNotify={notify} />}
@@ -143,7 +229,7 @@ function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string
   return <header className="page-header"><div><small>{eyebrow}</small><h1>{title}</h1></div>{action}</header>
 }
 
-function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; targets: Target[]; onNavigate: (p: Page, observationId?: number) => void; onNotify: Notify }) {
+function Dashboard({ config, settings, targets, onNavigate, onNotify }: { config: any; settings: Settings; targets: Target[]; onNavigate: (p: Page, observationId?: number) => void; onNotify: Notify }) {
   const now = useClock()
   const [upcoming, setUpcoming] = useState<Observation[]>([])
   const [receptions, setReceptions] = useState<Observation[]>([])
@@ -190,6 +276,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
   }, [now])
   const visibleUpcoming = useMemo(() => activeUpcoming(upcoming, now.getTime()).sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime()), [upcoming, now])
   const next = useMemo(() => [...visibleUpcoming].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime())[0], [visibleUpcoming])
+  const nextTrack = useGroundTrack(next?.id)
   const upcomingList = useMemo(() => [...visibleUpcoming].sort((a, b) => new Date(a.start || 0).getTime() - new Date(b.start || 0).getTime()).slice(0, 6), [visibleUpcoming])
   const receptionList = useMemo(() => [...receptions].sort((a, b) => new Date(b.end || b.start || 0).getTime() - new Date(a.end || a.start || 0).getTime()).slice(0, 6), [receptions])
   return <div className="page">
@@ -204,7 +291,7 @@ function Dashboard({ config, targets, onNavigate, onNotify }: { config: any; tar
       <Timeline observations={visibleUpcoming} now={now} />
     </section>
     <section className="panel next-observation"><div className="panel-title"><div><small>NEXT OBSERVATION</small><h2>{next ? observationSatellite(next) : 'No scheduled pass'}</h2></div>{next && <span className={`observation-status ${listeningStatus(next, now).className}`}>{listeningStatus(next, now).label}</span>}</div>
-      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMap observation={next} /></div><div className="next-polar-panel"><PolarPlot observation={next} now={now} /></div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
+      {next ? <div className="next-observation-grid"><div className="next-observation-data"><div className="next-transmitter"><small>TRANSMITTER</small><strong>{next.transmitter_description || next.transmitter_mode || next.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(next))} · {next.transmitter_mode || 'Unknown mode'}</span></div><div className="countdown-grid"><div><small>START</small><strong>{distanceFrom(now, next.start)}</strong><span>{formatUtc(next.start)}</span></div><div><small>END</small><strong>{distanceFrom(now, next.end)}</strong><span>{formatUtc(next.end)}</span></div></div><ObservationProgress observation={next} now={now} /><dl className="observation-facts"><dt>Duration</dt><dd>{observationDuration(next)}</dd><dt>Maximum elevation</dt><dd>{degrees(next.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(next.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(next.set_azimuth)}</dd><dt>Observation ID</dt><dd><button className="observation-id-link" onClick={() => onNavigate('observations', next.id)}>#{next.id} →</button></dd></dl><WorldTrackMapView observation={next} track={nextTrack.track} error={nextTrack.error} /></div><div className="next-polar-panel"><PolarPlot observation={next} now={now} />{settings.overview_globe_enabled && <GlobeTrackMap observation={next} track={nextTrack.track} error={nextTrack.error} />}</div></div> : <div className="empty">There are no upcoming observations in the loaded 48-hour window.</div>}
     </section>
     <section className="split">
       <div className="panel overview-list"><div className="panel-title"><div><small>NEXT 6</small><h2>Upcoming List</h2></div><div className="button-row"><button className="ghost" disabled={refreshing} onClick={() => refreshTimeline(true).then(() => onNotify('Upcoming timeline refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('observations')}>View all →</button></div></div>{upcomingList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('observations', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{observationDuration(item)} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!upcomingList.length && <div className="empty">No upcoming observations.</div>}</div>
@@ -284,70 +371,226 @@ const WORLD_MAP_ROWS: Array<[number, string]> = [
   [123, '23:54 95:4 107:138'], [125, '21:66 91:158'], [127, '3:256'], [129, '3:256'],
 ]
 
-function WorldTrackMap({ observation }: { observation: Observation }) {
-  const now = useClock()
+const WORLD_LAND_POINTS = WORLD_MAP_ROWS.flatMap(([y, row]) => row.split(' ').flatMap(cell => {
+  const [x, width] = cell.split(':').map(Number)
+  const points: Array<{ latitude: number; longitude: number }> = []
+  for (let offset = 0; offset < width; offset += 2) {
+    points.push({
+      latitude: 90 - ((y - 1) / 132) * 180,
+      longitude: (((x + offset - 1) / 260) * 360) - 180,
+    })
+  }
+  return points
+}))
+
+type GroundTrackState = { track: GroundTrack | null; error: string }
+
+function useGroundTrack(observationId?: number): GroundTrackState {
   const [track, setTrack] = useState<GroundTrack | null>(null), [error, setError] = useState('')
   useEffect(() => {
+    if (!observationId) {
+      setTrack(null); setError('')
+      return
+    }
     let canceled = false
     setTrack(null); setError('')
-    api<GroundTrack>(`/observations/${observation.id}/ground-track`).then(value => { if (!canceled) setTrack(value) }).catch(value => { if (!canceled) setError(String(value)) })
+    api<GroundTrack>(`/observations/${observationId}/ground-track`).then(value => { if (!canceled) setTrack(value) }).catch(value => { if (!canceled) setError(String(value)) })
     return () => { canceled = true }
-  }, [observation.id])
-  const project = (point: Pick<GroundTrackPoint, 'latitude' | 'longitude'>) => ({ x: 1 + ((point.longitude + 180) / 360) * 260, y: 1 + ((90 - point.latitude) / 180) * 132 })
+  }, [observationId])
+  return { track, error }
+}
+
+function projectWorldPoint(point: Pick<GroundTrackPoint, 'latitude' | 'longitude'>) {
+  return { x: 1 + ((point.longitude + 180) / 360) * 260, y: 1 + ((90 - point.latitude) / 180) * 132 }
+}
+
+function interpolateGroundTrackPoint(track: GroundTrack | null, now: Date): GroundTrackPoint | null {
+  if (!track?.points.length) return track?.current ?? null
+  const nowMs = now.getTime()
+  let previous = track.points[0]
+  for (const next of track.points.slice(1)) {
+    const previousMs = new Date(previous.time).getTime(), nextMs = new Date(next.time).getTime()
+    if (Number.isFinite(previousMs) && Number.isFinite(nextMs) && nowMs >= previousMs && nowMs <= nextMs && nextMs > previousMs) {
+      const ratio = (nowMs - previousMs) / (nextMs - previousMs)
+      let longitude = next.longitude
+      if (longitude - previous.longitude > 180) longitude -= 360
+      if (previous.longitude - longitude > 180) longitude += 360
+      longitude = previous.longitude + (longitude - previous.longitude) * ratio
+      longitude = ((longitude + 540) % 360) - 180
+      return {
+        time: now.toISOString(),
+        latitude: previous.latitude + (next.latitude - previous.latitude) * ratio,
+        longitude,
+      }
+    }
+    previous = next
+  }
+  return nowMs < new Date(track.points[0].time).getTime() ? track.points[0] : track.points[track.points.length - 1]
+}
+
+function trackDirectionAngle(track: GroundTrack | null, now: Date, project: (point: GroundTrackPoint) => { x: number; y: number } | null): number | null {
+  if (!track?.points || track.points.length < 2) return null
+  const nowMs = now.getTime()
+  let from = track.points[0], to = track.points[1]
+  for (let index = 1; index < track.points.length; index += 1) {
+    const candidate = track.points[index], candidateMs = new Date(candidate.time).getTime()
+    if (Number.isFinite(candidateMs) && candidateMs >= nowMs) {
+      from = track.points[index - 1]
+      to = candidate
+      break
+    }
+  }
+  if (Math.abs(to.longitude - from.longitude) > 180) return null
+  const start = project(from), end = project(to)
+  if (!start || !end) return null
+  const dx = end.x - start.x, dy = end.y - start.y
+  if (Math.hypot(dx, dy) < 0.1) return null
+  return Math.atan2(dy, dx) * 180 / Math.PI
+}
+
+function WorldTrackMap({ observation }: { observation: Observation }) {
+  const { track, error } = useGroundTrack(observation.id)
+  return <WorldTrackMapView observation={observation} track={track} error={error} />
+}
+
+function WorldTrackMapView({ observation, track, error }: { observation: Observation; track: GroundTrack | null; error: string }) {
+  const now = useClock()
   const segments = useMemo(() => {
     if (!track?.points.length) return []
     const paths: string[][] = [[]]
     let previous = track.points[0]
     for (const point of track.points) {
       if (Math.abs(point.longitude - previous.longitude) > 180) paths.push([])
-      const projected = project(point)
+      const projected = projectWorldPoint(point)
       paths[paths.length - 1].push(`${paths[paths.length - 1].length ? 'L' : 'M'} ${projected.x.toFixed(1)} ${projected.y.toFixed(1)}`)
       previous = point
     }
     return paths.filter(path => path.length > 1).map(path => path.join(' '))
   }, [track])
-  const livePoint = useMemo(() => {
-    if (!track?.points.length) return track?.current ?? null
-    const nowMs = now.getTime()
-    let previous = track.points[0]
-    for (const next of track.points.slice(1)) {
-      const previousMs = new Date(previous.time).getTime(), nextMs = new Date(next.time).getTime()
-      if (Number.isFinite(previousMs) && Number.isFinite(nextMs) && nowMs >= previousMs && nowMs <= nextMs && nextMs > previousMs) {
-        const ratio = (nowMs - previousMs) / (nextMs - previousMs)
-        let longitude = next.longitude
-        if (longitude - previous.longitude > 180) longitude -= 360
-        if (previous.longitude - longitude > 180) longitude += 360
-        longitude = previous.longitude + (longitude - previous.longitude) * ratio
-        longitude = ((longitude + 540) % 360) - 180
-        return {
-          time: now.toISOString(),
-          latitude: previous.latitude + (next.latitude - previous.latitude) * ratio,
-          longitude,
-        }
-      }
-      previous = next
-    }
-    return nowMs < new Date(track.points[0].time).getTime() ? track.points[0] : track.points[track.points.length - 1]
-  }, [track, now])
-  const directionAngle = useMemo(() => {
-    if (!track?.points || track.points.length < 2) return null
-    const nowMs = now.getTime()
-    let from = track.points[0], to = track.points[1]
-    for (let index = 1; index < track.points.length; index += 1) {
-      const candidate = track.points[index], candidateMs = new Date(candidate.time).getTime()
-      if (Number.isFinite(candidateMs) && candidateMs >= nowMs) {
-        from = track.points[index - 1]
-        to = candidate
-        break
-      }
-    }
-    if (Math.abs(to.longitude - from.longitude) > 180) return null
-    const start = project(from), end = project(to), dx = end.x - start.x, dy = end.y - start.y
-    if (Math.hypot(dx, dy) < 0.1) return null
-    return Math.atan2(dy, dx) * 180 / Math.PI
-  }, [track, now])
-  const current = livePoint ? project(livePoint) : null, station = track?.station ? project(track.station) : null
+  const livePoint = useMemo(() => interpolateGroundTrackPoint(track, now), [track, now])
+  const directionAngle = useMemo(() => trackDirectionAngle(track, now, point => projectWorldPoint(point)), [track, now])
+  const current = livePoint ? projectWorldPoint(livePoint) : null, station = track?.station ? projectWorldPoint(track.station) : null
   return <div className="world-map-wrap"><div className="panel-title"><div><small>WORLD REFERENCE</small><h2>Ground track</h2></div>{livePoint && <span className="timeline-count">{livePoint.latitude.toFixed(2)}°, {livePoint.longitude.toFixed(2)}°</span>}</div><div className="world-map-frame">{track ? <svg className="world-map" viewBox="0 0 262 134" role="img" aria-label={`World map showing ${observationSatellite(observation)} ground track and station position`}><rect className="world-ocean" x="0" y="0" width="262" height="134" /><rect className="world-border" x="1" y="1" width="260" height="132" />{[-120, -60, 0, 60, 120].map(lon => { const x = 1 + ((lon + 180) / 360) * 260; return <line className="world-grid" key={`lon-${lon}`} x1={x} y1="1" x2={x} y2="133" /> })}{[-60, -30, 0, 30, 60].map(lat => { const y = 1 + ((90 - lat) / 180) * 132; return <line className="world-grid" key={`lat-${lat}`} x1="1" y1={y} x2="261" y2={y} /> })}<g className="world-pixel-land">{WORLD_MAP_ROWS.map(([y, row]) => row.split(' ').map((cell, index) => { const [x, width] = cell.split(':').map(Number); return <rect key={`${y}-${index}`} x={x} y={y} width={width} height="2" /> }))}</g>{segments.map((path, index) => <path className="world-track" key={index} d={path} />)}{station && <g className="world-station"><circle cx={station.x} cy={station.y} r="1.7" /><path d={`M ${station.x - 3} ${station.y} L ${station.x + 3} ${station.y} M ${station.x} ${station.y - 3} L ${station.x} ${station.y + 3}`} /></g>}{current && <g className="world-satellite">{directionAngle != null && <path className="world-satellite-arrow" d="M 5.2 -2.1 L 8.8 0 L 5.2 2.1" transform={`translate(${current.x} ${current.y}) rotate(${directionAngle})`} />}<circle className="world-satellite-pulse" cx={current.x} cy={current.y} r="4" /><circle cx={current.x} cy={current.y} r="2.1" /></g>}</svg> : <div className="catalog-loading">{error ? `Ground track unavailable: ${error}` : <><span className="spinner" /> Loading ground track…</>}</div>}</div><div className="world-map-legend"><span><i className="satellite" />Satellite now</span><span><i className="track" />Ground track</span><span><i className="station" />Station</span></div></div>
+}
+
+function GlobeTrackMap({ observation, track, error }: { observation: Observation; track: GroundTrack | null; error: string }) {
+  const now = useClock()
+  const livePoint = useMemo(() => interpolateGroundTrackPoint(track, now), [track, now])
+  const container = useRef<HTMLDivElement | null>(null)
+  const globe = useRef<EncomGlobeInstance | null>(null)
+  const animation = useRef<number | null>(null)
+  const satellite = useRef<EncomSatellite | null>(null)
+  const [globeScale, setGlobeScale] = useState(1.22)
+  const [globeViewAngle, setGlobeViewAngle] = useState(0.12)
+  const [globeError, setGlobeError] = useState('')
+  const removeSatellite = () => {
+    const current = satellite.current
+    if (!current) return
+    try { current.remove() } catch { /* old library cleanup is best-effort */ }
+    if (globe.current && current.mesh) {
+      try { globe.current.scene?.remove(current.mesh) } catch { /* old library cleanup is best-effort */ }
+    }
+    if (globe.current?.satellites && current.toString) {
+      try { delete globe.current.satellites[current.toString()] } catch { /* old library cleanup is best-effort */ }
+    }
+    if (globe.current?.satellites) {
+      for (const [key, value] of Object.entries(globe.current.satellites)) {
+        if (value === current) delete globe.current.satellites[key]
+      }
+    }
+    satellite.current = null
+  }
+  useEffect(() => {
+    if (!track || !container.current) return
+    let destroyed = false
+    setGlobeError('')
+    const element = container.current
+    element.replaceChildren()
+    const width = Math.max(280, Math.floor(element.clientWidth || 320))
+    const height = Math.max(280, Math.min(360, width))
+    let observer: ResizeObserver | null = null
+    const start = async () => {
+      try {
+        const [Constructor, { default: gridSource }] = await Promise.all([
+          loadEncomGlobe(),
+          import('encom-globe/grid.js?raw'),
+        ])
+        if (destroyed) return
+        const grid = parseEncomGrid(gridSource)
+        const instance = new Constructor(width, height, {
+          font: 'DM Mono',
+          data: [],
+          tiles: grid.tiles,
+          baseColor: '#43d8de',
+          markerColor: '#ff9f43',
+          pinColor: '#ff9f43',
+          satelliteColor: '#b5ef62',
+          scale: globeScale,
+          dayLength: 26000,
+          introLinesDuration: 1600,
+          introLinesCount: 48,
+          maxPins: 6,
+          maxMarkers: 2,
+          viewAngle: globeViewAngle,
+        })
+        globe.current = instance
+        instance.domElement.className = 'encom-globe-canvas'
+        element.appendChild(instance.domElement)
+        const animate = () => {
+          if (destroyed) return
+          if (!document.hidden) instance.tick()
+          animation.current = window.requestAnimationFrame(animate)
+        }
+        instance.init(() => {
+          if (destroyed) return
+          if (track.station) instance.addPin(track.station.latitude, track.station.longitude, 'Station')
+          if (livePoint && !satellite.current) satellite.current = addEncomSatellite(instance, livePoint)
+          animate()
+        })
+        const resize = () => {
+          const nextWidth = Math.max(280, Math.floor(element.clientWidth || width))
+          const nextHeight = Math.max(280, Math.min(360, nextWidth))
+          if (instance.camera && instance.renderer) {
+            instance.camera.aspect = nextWidth / nextHeight
+            instance.camera.updateProjectionMatrix()
+            instance.renderer.setSize(nextWidth, nextHeight)
+          }
+        }
+        observer = new ResizeObserver(resize)
+        observer.observe(element)
+      } catch (value) {
+        if (!destroyed) setGlobeError(String(value))
+      }
+    }
+    void start()
+    return () => {
+      destroyed = true
+      observer?.disconnect()
+      if (animation.current) window.cancelAnimationFrame(animation.current)
+      animation.current = null
+      removeSatellite()
+      if (globe.current) {
+        try { globe.current.destroy() } catch { /* old library cleanup is best-effort */ }
+        globe.current = null
+      }
+      element.replaceChildren()
+    }
+  }, [observation.id, track])
+  useEffect(() => {
+    globe.current?.setScale?.(globeScale)
+  }, [globeScale])
+  useEffect(() => {
+    if (globe.current) globe.current.viewAngle = globeViewAngle
+  }, [globeViewAngle])
+  useEffect(() => {
+    if (!globe.current || !livePoint) return
+    if (satellite.current) {
+      moveEncomSatellite(satellite.current, livePoint.latitude, livePoint.longitude, 1.34)
+      return
+    }
+    satellite.current = addEncomSatellite(globe.current, livePoint)
+  }, [livePoint?.latitude, livePoint?.longitude])
+  return <div className="globe-map-wrap"><div className="panel-title"><div><small>ENCOM</small><h2>Globe</h2></div><div className="globe-controls"><span className="globe-button-group"><button className="ghost" aria-label="Zoom out globe" onClick={() => setGlobeScale(value => Math.max(0.8, Number((value - 0.1).toFixed(2))))}>−</button><button className="ghost" aria-label="Zoom in globe" onClick={() => setGlobeScale(value => Math.min(1.8, Number((value + 0.1).toFixed(2))))}>+</button></span><span className="globe-button-group"><button className="ghost" aria-label="Raise globe view angle" onClick={() => setGlobeViewAngle(value => Math.min(0.7, Number((value + 0.05).toFixed(2))))}>↑</button><button className="ghost" aria-label="Lower globe view angle" onClick={() => setGlobeViewAngle(value => Math.max(-0.35, Number((value - 0.05).toFixed(2))))}>↓</button></span></div></div><div className="globe-frame">{track && !globeError ? <div ref={container} className="encom-globe-host" aria-label={`ENCOM globe showing ${observationSatellite(observation)} and station position`} /> : <div className="catalog-loading">{error || globeError ? `Globe unavailable: ${error || globeError}` : <><span className="spinner" /> Loading ENCOM globe…</>}</div>}</div></div>
 }
 
 function PolarPlot({ observation, now }: { observation: Observation; now?: Date }) {
@@ -695,7 +938,7 @@ function SettingsPage({ value, config, onSaved, onNotify }: { value: Settings; c
   const chooseFile = async (file?: File) => { if (!file) return; try { const text = await file.text(); const payload = JSON.parse(text); const count = targetCount(payload); if (count == null) throw new Error('This file does not contain a SatScheduler targets array.'); setImportText(JSON.stringify(payload, null, 2)); setImportFileName(`${file.name} · ${count} targets`) } catch (error) { setImportText(''); setImportFileName(''); onNotify(`Cannot read import file: ${String(error)}`, 'error') } }
   const importConfig = async () => { const payload = JSON.parse(importText), count = targetCount(payload); if (count == null) throw new Error('JSON does not contain a SatScheduler targets array.'); if (!confirm(`Import ${count} targets for station ${config?.station?.station_id || '—'} and replace the current watch list? Targets for other stations will be skipped.`)) return; const result = await api<{ imported: number; skipped_station_mismatch: number }>('/import?replace=true', { method: 'POST', body: JSON.stringify(payload) }); setImportText(''); setImportFileName(`Imported ${result.imported} · skipped ${result.skipped_station_mismatch} for station mismatch`); await onSaved(); onNotify(`Import completed: ${result.imported} targets imported, ${result.skipped_station_mismatch} skipped.`, 'success') }
   return <div className="page"><PageHeader eyebrow="SYSTEM CONFIGURATION" title="Scheduler settings" action={<button className="primary" onClick={() => save().catch(e => onNotify(String(e), 'error'))}>Save settings</button>} />
-    <section className="split"><div className="panel"><div className="panel-title"><h2>Prediction and ranking</h2></div><div className="form-grid"><label>Primary engine<select value={form.prediction_engine} onChange={e => set('prediction_engine', e.target.value)}><option value="satnogs_predict">SatNOGS Predict</option><option value="skyfield">Direct Skyfield</option></select><small className="field-help">The engine used to calculate pass times, elevation and azimuth. This engine supplies the actual scheduling candidates.</small></label><label>Sort mode<select value={form.sort_mode} onChange={e => set('sort_mode', e.target.value)}><option value="list_priority">List priority</option><option value="list_priority_best_elevation">List priority + best elevation</option><option value="best_elevation">Best elevation only</option><option value="satnogs_default">SatNOG default mode</option></select><small className="field-help">Controls which candidate passes are considered first when passes conflict or a run limit is reached.</small></label></div><label className="check setting-check"><input type="checkbox" checked={form.comparison_enabled} onChange={e => set('comparison_enabled', e.target.checked)} /><span>Run the secondary prediction engine for comparison<small className="field-help">Calculates the same passes with the other engine and records timing differences. It does not change which engine schedules observations.</small></span></label></div>
+    <section className="split"><div className="panel"><div className="panel-title"><h2>Prediction and ranking</h2></div><div className="form-grid"><label>Primary engine<select value={form.prediction_engine} onChange={e => set('prediction_engine', e.target.value)}><option value="satnogs_predict">SatNOGS Predict</option><option value="skyfield">Direct Skyfield</option></select><small className="field-help">The engine used to calculate pass times, elevation and azimuth. This engine supplies the actual scheduling candidates.</small></label><label>Sort mode<select value={form.sort_mode} onChange={e => set('sort_mode', e.target.value)}><option value="list_priority">List priority</option><option value="list_priority_best_elevation">List priority + best elevation</option><option value="best_elevation">Best elevation only</option><option value="satnogs_default">SatNOG default mode</option></select><small className="field-help">Controls which candidate passes are considered first when passes conflict or a run limit is reached.</small></label></div><label className="check setting-check"><input type="checkbox" checked={form.comparison_enabled} onChange={e => set('comparison_enabled', e.target.checked)} /><span>Run the secondary prediction engine for comparison<small className="field-help">Calculates the same passes with the other engine and records timing differences. It does not change which engine schedules observations.</small></span></label><div className="setting-divider"><small>OVERVIEW DISPLAY</small><strong>Browser rendering</strong></div><label className="check setting-check setting-switch"><input type="checkbox" checked={form.overview_globe_enabled} onChange={e => set('overview_globe_enabled', e.target.checked)} /><span>Show ENCOM Globe on Overview<small className="field-help">Uses the real encom-globe WebGL renderer below the Polar plot. Disable this on low-power client devices if the page feels heavy.</small></span></label></div>
       <div className="panel"><div className="panel-title"><div><small>AUTOMATIC BATCH SCHEDULING</small><h2>Automatic execution</h2></div></div><div className="form-grid"><label>Mode<select value={form.trigger_mode} onChange={e => set('trigger_mode', e.target.value)}><option value="disabled">Disabled</option><option value="daily">Daily, station local time</option><option value="interval">Every N hours</option></select><small className="field-help">Choose whether automatic planning is disabled, runs once per local day, or repeats at an hourly interval.</small></label>{form.trigger_mode === 'daily' && <label>Daily time<input type="time" value={form.daily_time_local} onChange={e => set('daily_time_local', e.target.value)} /><small className="field-help">Interpreted in the station timezone configured by Docker Compose.</small></label>}{form.trigger_mode === 'interval' && <NumberField label="Interval hours" help="The interval is measured between automatic runs." value={form.interval_hours} min={1} max={48} onChange={v => set('interval_hours', v)} />}<div className="setting-divider"><small>AUTOMATIC TIMELINE REFRESH</small><strong>Upcoming cache</strong></div><label className="check setting-check setting-switch"><input type="checkbox" checked={form.upcoming_auto_refresh_enabled} onChange={e => set('upcoming_auto_refresh_enabled', e.target.checked)} /><span>Automatically refresh Upcoming on the server<small className="field-help">Runs independently in the Docker service, including when no browser is open.</small></span></label>{form.upcoming_auto_refresh_enabled && <NumberField label="Upcoming refresh hours" help="The server fetches the complete station timeline every 1–24 hours." value={form.upcoming_auto_refresh_hours} min={1} max={24} step={1} onChange={v => set('upcoming_auto_refresh_hours', v)} />}</div></div></section>
     <section className="split"><div className="panel"><div className="panel-title"><h2>Planning, batch and API policy</h2></div><div className="form-grid"><NumberField label="Horizon hours" help="How far ahead both manual and automatic planning calculate. SatNOGS accepts at most 48 hours." value={form.horizon_hours} min={0.5} max={48} step={0.5} onChange={v => set('horizon_hours', v)} /><NumberField label="Lead time minutes" help="Starts the planning window this many minutes after calculation begins, avoiding observations too close to submit safely." value={form.lead_minutes} min={1} max={180} onChange={v => set('lead_minutes', v)} /><NumberField label="Satellites / run" help="Number of planned observations sent in each SatNOGS batch request. For example, 60 observations with a value of 15 are submitted as four API batches." value={form.satellites_per_run} min={1} max={50} onChange={v => set('satellites_per_run', v)} /><NumberField label="API request interval seconds" help="Minimum delay between real SatNOGS HTTP requests, including pagination and scheduling POSTs. It is not applied to local orbit calculations. 3–5 seconds is recommended to avoid HTTP 429." value={form.api_request_interval_seconds} min={0.5} max={30} step={0.5} onChange={v => set('api_request_interval_seconds', v)} /><NumberField label="Conflict buffer seconds" help="Safety margin applied only around reservations already present at the station. Planned passes are compared using their actual times. 300 seconds matches the iOS planner." value={form.conflict_buffer_seconds} min={0} max={3600} onChange={v => set('conflict_buffer_seconds', v)} /></div><label className="check setting-check"><input type="checkbox" checked={form.retry_individually} onChange={e => set('retry_individually', e.target.checked)} /><span>Retry failed batches one observation at a time<small className="field-help">All batch requests are attempted first. Afterwards, every observation from a failed batch is retried separately so one invalid pass does not block the rest.</small></span></label></div>
       <div className="panel"><div className="panel-title"><h2>Compose-managed station</h2></div><dl className="facts"><dt>API token</dt><dd>{config?.api_token_configured ? 'Configured' : 'Missing'}</dd><dt>Station</dt><dd>{config?.station?.station_id || 'Missing'}</dd><dt>Coordinates</dt><dd>{config?.station ? `${config.station.latitude}, ${config.station.longitude}, ${config.station.altitude_m} m` : 'Missing'}</dd><dt>Timezone</dt><dd>{config?.station?.timezone || 'UTC'}</dd></dl></div></section>

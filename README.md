@@ -1,62 +1,20 @@
 # SatScheduler Web
 
-SatScheduler Web is a single-ground-station SatNOGS observation planner designed for Docker,
-CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-later.
+SatScheduler Web is a single-ground-station SatNOGS observation planner for Docker, CasaOS and
+low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-later.
 
-## Current features
+## Features
 
-- Ordered watch list with drag-and-drop, up/down controls, multi-select move-to-top and confirmed
-  batch deletion.
-- Searchable satellite picker matching name, aliases, SatNOGS ID and NORAD ID, with a visible
-  catalog loading state and a 100-row render limit.
-- Satellite and transmitter selection from SatNOGS DB.
-- Transmitter selection enriched with cached SatNOGS Network good/unknown/bad statistics,
-  a three-color ratio bar and an iOS-compatible recommendation from the latest two good-observation
-  pages. The DB transmitter list renders first; Network evidence loads non-blockingly so a rate
-  limit cannot prevent selecting or saving a target.
-- Batched TLE retrieval for all enabled targets.
-- SatNOGS Predict and direct Skyfield/SGP4 prediction engines.
-- Optional prediction comparison without duplicate scheduling.
-- Minimum 180-second observation duration, minimum horizon, minimum/maximum culmination, wrapped
-  azimuth and station-daylight filters.
-- Four scheduling modes: list priority, list priority plus elevation, elevation only, and
-  SatNOGS default priority scoring.
-- Manual plan preview that selects every non-conflicting pass, supports removing/reordering the
-  review list, displays compact AOS/MAX/LOS Polar Plots, and requires confirmation before batch
-  submission.
-- iOS-compatible conflict handling: the configurable safety buffer applies around existing
-  SatNOGS Observations, while candidates selected in the same plan use their actual pass times.
-- A combined station/planning/submission timeline and live per-observation states. Submission can
-  be stopped after the current request; successful rows are cleared while failed rows remain.
-- Configurable API batch size and shared HTTP-only request spacing. All batches are attempted before
-  observations from failed batches are retried individually.
-- Server-side background plan/submission jobs with live TLE, orbit-prediction, Observation-page,
-  ranking, selection, batch and retry progress.
-- One-hour persistent plan-result cache; leaving the Schedule page does not cancel active work.
-- Daily station-local-time or fixed-hour automatic execution, using a 48-hour default and maximum
-  planning horizon.
-- Overview card for the next observation with live listening state/countdowns, transmitter details,
-  pass geometry, a polar plot and a lightweight SVG world ground-track map.
-- Background-paginated Upcoming view with live page/record progress, a matching 48-hour timeline,
-  force refresh and completion/failure notifications.
-- Overview retains the stale timeline during background pagination and exposes the current page and
-  active-observation count until the refreshed timeline is ready.
-- UTC-driven local timeline expiry/reordering, local Reception search across loaded observation and
-  radio fields, Observer labels, colored reception states and compact pass Polar Plots in both lists.
-- Cursor-paginated Reception archive with loaded-record Good/Bad/Unknown filtering.
-- Reception detail view with waterfall, audio, transmitter/station metadata, pass geometry,
-  polar plot, TLE, artifact links and a link to the matching SatNOGS Network page.
-- Upcoming detail view with station/transmitter metadata, pass geometry, TLE, polar plot and the
-  same simple world map showing satellite subpoint, ground track and station position.
-- URL-addressable lists and details: `/upcoming`, `/upcoming/<observation-id>`,
-  `/receptions`, and `/receptions/<observation-id>`. Direct ID views fetch the SatNOGS detail
-  temporarily and classify it as Upcoming or Reception from its current status.
-- Persistent one-hour caches for satellite, transmitter, TLE, station, Upcoming and Reception lists.
-- A fixed UTC reference clock across every desktop and mobile page, conditional automatic-job
-  settings, and full-width Reception waterfalls with separate Audio and Polar Plot panels.
-- A shared configurable SatNOGS API request interval (4 seconds by default) covering DB/Network
-  reads, pagination and observation submissions.
-- File and pasted-JSON import/export using the iOS-compatible SatScheduler watch-list format.
+- Single-station watch list with satellite/transmitter management.
+- Searchable satellite picker with transmitter statistics and recommendations.
+- SatNOGS Predict and Skyfield/SGP4 pass prediction.
+- Manual and scheduled batch observation planning.
+- Configurable scheduling modes, pass filters, API request interval and retry behavior.
+- Upcoming observations timeline, next-observation overview, polar plot and ground-track map.
+- Reception archive with status filtering, search, waterfall/audio/detail pages.
+- Server-side SQLite cache shared by all browsers/devices.
+- iOS-compatible watch-list import/export.
+- Docker image support for `linux/amd64`, `linux/arm64` and `linux/arm/v7`.
 
 ## Run with Docker Compose
 
@@ -69,6 +27,12 @@ docker compose up -d
 
 Open `http://HOST:8080`.
 
+The default Compose file pulls:
+
+```yaml
+image: ghcr.io/bi119ate5hxk/satscheduler-web:latest
+```
+
 Required values:
 
 ```dotenv
@@ -80,118 +44,64 @@ STATION_ALTITUDE_M=40
 STATION_TIMEZONE=Asia/Tokyo
 ```
 
-Compose environment values take priority. When coordinates are omitted, the backend attempts to
-read them from the SatNOGS Network station endpoint. All API scheduling timestamps remain UTC;
-`STATION_TIMEZONE` is an IANA timezone used for daily automatic execution and display.
-SQLite data is kept in the Compose-managed `satscheduler_data` volume so the unprivileged runtime
-user can write safely on CasaOS hosts.
+Coordinates can be omitted; the backend will try to read them from the SatNOGS Network station
+endpoint. `STATION_TIMEZONE` is the station-local IANA timezone used for daily automatic execution
+and display. Scheduling timestamps sent to SatNOGS remain UTC.
 
-The default Compose file pulls the published multi-architecture image from GHCR:
+SQLite data is stored in the Compose-managed `satscheduler_data` volume.
 
-```yaml
-image: ghcr.io/bi119ate5hxk/satscheduler-web:latest
-```
-
-To update an installed container:
+## Update
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
+If GHCR reports `manifest unknown`, make sure the `latest` package exists and is public. You can
+also use an explicit tag such as `:edge` if that is the only published tag.
+
 ## Local development build
 
-Use `compose.dev.yaml` when building from the local checkout:
+Use the development override when building from source:
 
 ```bash
 docker compose -f compose.yaml -f compose.dev.yaml up --build
 ```
 
-This keeps the normal deployment Compose file optimized for CasaOS and low-power hosts, while still
-allowing development builds without editing `compose.yaml`.
-
-## Publish images to GHCR
-
-The repository includes `.github/workflows/docker.yml`. It builds and pushes
-`ghcr.io/bi119ate5hxk/satscheduler-web` for:
-
-- `linux/amd64`
-- `linux/arm64`
-- `linux/arm/v7`
-
-Publishing rules:
-
-- Push to `main`: publishes `latest`, `edge` and `sha-<commit>` tags.
-- Push a version tag such as `v1.2.3`: publishes `1.2.3`, `1.2` and `sha-<commit>`.
-- Manual `workflow_dispatch`: can be started from the GitHub Actions tab.
-
-First-time GHCR setup:
-
-1. Push this repository to GitHub with the workflow file committed.
-2. Open the repository on GitHub, then open the `Actions` tab.
-3. If GitHub asks to enable workflows for the repository, enable them.
-4. Push to `main` or run the `Docker image` workflow manually.
-5. After the first successful run, open the package page under the repository or your GitHub
-   profile Packages section.
-6. If the package is private, change its visibility to public if you want unauthenticated users and
-   CasaOS hosts to pull it without `docker login ghcr.io`.
-
-No extra secret is required for publishing from GitHub Actions. The workflow uses GitHub's built-in
-`GITHUB_TOKEN` with `packages: write` permission.
-
-## ARMv7
-
-The runtime uses Debian Bookworm slim and Debian's architecture-native NumPy package. The image is
-structured for `linux/amd64`, `linux/arm64` and `linux/arm/v7`; both native ARM64 startup and a full
-ARMv7 image build have been verified. Build and publish the ARM image in CI rather than compiling
-scientific dependencies on the target device.
-
-```bash
-docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t IMAGE --push .
-```
+This keeps the normal `compose.yaml` suitable for CasaOS and low-power hosts.
 
 ## Cache behavior
 
-Satellite catalogs, per-satellite transmitters, batched TLEs, station details, Upcoming pages and
-Reception pages use a persistent one-hour TTL in SQLite. The web UI requests the backend when a
-page opens or switches; the backend returns the shared server cache when it is still fresh, so
-multiple browsers and devices see the same data without each keeping a separate persistent copy.
-When the server cache is expired but still available, Upcoming, Overview, Schedule and Reception
-views return the stale SQLite data immediately and start a deduplicated background refresh; the web
-UI polls the backend and replaces the timeline/list once the refreshed cache is ready. A manual
-refresh bypasses the relevant server cache. Observation details and their artifact URLs remain
-uncached. Successful scheduling is merged into the server's existing Upcoming cache immediately,
-and the active Schedule page also reflects the new observations in memory. An optional 1–24 hour
-Upcoming auto-refresh runs inside the backend scheduler, including when no browser is open.
-Overview shows six cached Upcoming observations and six cached Reception results; each entry opens
-its detail page. The Reception summary refresh requests only the newest page, while an Upcoming
-refresh updates the complete paginated station timeline.
+Frequently used SatNOGS data is cached in SQLite to reduce API calls. Satellite catalogs,
+transmitters, TLEs, station details, Upcoming pages, Reception pages and planning results are reused
+when fresh. Expired list data can still be shown immediately while the backend refreshes it in the
+background.
 
-The latest completed planning result is stored for one hour. Opening Schedule restores that result
-without recalculating; `Recalculate passes` explicitly starts a fresh background job. Calculation
-and submission status remain on the server, so changing pages does not cancel either operation.
-The UI polls only local status endpoints and shows skipped-reason counts plus a persistent,
-per-observation live submission status list.
+Manual refresh bypasses the relevant cache. Observation detail pages and artifact URLs are fetched
+on demand.
 
-All outbound SatNOGS DB and Network requests share one global start-rate limiter. The interval is
-configured in Settings under `API request interval seconds` (0.5–30 seconds, default 4); changing
-it takes effect for the next request without restarting the container. A 3–5 second interval is
-recommended to reduce HTTP 429 responses. Cache hits do not enter the limiter because they do not
-make an external request.
+All outbound SatNOGS requests share the configurable API request interval in Settings. A 3–5 second
+interval is recommended to reduce HTTP 429 responses.
 
-Per-transmitter Network statistics are fetched only while adding/editing a watch target and kept
-for 24 hours. The recent-good recommendation is cached for one hour. The selected transmitter's
-success rate, good count and same-satellite maximum good count are saved with the target, so manual
-and automatic batch planning performs no statistics request. SatNOGS default mode skips targets
-whose saved statistics are unavailable; the other sort modes remain usable.
+## Scheduling modes
 
-## Priority semantics
+Watch-list order is the visible priority order.
 
-Watch-list priority is the visible up/down order. `List priority` follows that target order;
-`List priority + best elevation` follows target order and prefers the highest pass for each target;
-`Best elevation` ignores list order for the primary ranking; `SatNOGS default` uses the saved
-transmitter statistics formula. The old numeric `priority` field remains accepted in JSON/API
-payloads for compatibility, but it is no longer shown because none of these four modes uses it.
+- `List priority`: follows the watch-list order.
+- `List priority + best elevation`: follows watch-list order and prefers the best pass per target.
+- `Best elevation`: ranks primarily by maximum elevation.
+- `SatNOGS default`: uses saved transmitter statistics.
+
+The old numeric `priority` field remains accepted in JSON/API payloads for compatibility, but it is
+not shown in the UI.
+
+## Import/export compatibility
+
+The settings page exports the iOS-compatible SatScheduler watch-list format. The same file is
+accepted by the Android app. Imports only accept targets whose `stationIDs` include the configured
+station ID; targets for other stations are skipped.
+
+Legacy SatScheduler Web export shapes are still accepted.
 
 ## Development
 
@@ -211,24 +121,10 @@ pnpm install
 pnpm run dev
 ```
 
-Run checks:
+Checks:
 
 ```bash
 .venv/bin/ruff check backend/app backend/tests
 .venv/bin/pytest
 cd frontend && pnpm run build
 ```
-
-## Import/export compatibility
-
-The settings page exports one watch-list format, matching the iOS app's
-`schemaVersion`/`exportedAt`/`targets` envelope. Target records use iOS acronym keys such as
-`satelliteID`, `transmitterID` and `stationIDs`, and include station names and snapshots. The same
-file is accepted by the Android app. Files can be selected directly or JSON can be pasted.
-During import, only targets whose `stationIDs` contain the configured station ID are accepted.
-Targets for other stations are skipped; a file containing no matching targets does not erase the
-existing watch list.
-
-Import still accepts exports from early SatScheduler Web builds, including bare arrays,
-`watch_targets`, `watchTargets`, `androidWatchTargets`, and Android lower-camel keys such as
-`satelliteId`.

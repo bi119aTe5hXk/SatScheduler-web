@@ -11,6 +11,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: 6.0.3
         version: 6.0.3(vite@8.1.4)
+      encom-globe:
+        specifier: 0.5.4
+        version: 0.5.4
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -300,6 +303,9 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
+  encom-globe@0.5.4:
+    resolution: {integrity: sha512-Gdlx1HLx23pHmRE6LAEb2DM0H31y3/s5WO+KiTguIfDGPX4q6b+RgGd/Qp8jbJAO2RukDd550VtXXvzkG3PJhg==}
+
   fdir@6.5.0:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
@@ -313,6 +319,9 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  hexasphere.js@0.2.2:
+    resolution: {integrity: sha512-QpUuIjcSYxT82++b8P13tMeCVquKM3O7c4CIUANguUd6+aJy98fZ/tYOZ+wgWDtlNED26dl4HWUZDLfS4M0VOg==}
 
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
@@ -404,6 +413,13 @@ packages:
     resolution: {integrity: sha512-J7EF+8X+CzRPaJPOv9Ck2wNWJvGnnl3PcNPAdGg6GTLjyVpyQ0yATMSXRFRV01BviT/9Gwuc3rjEyJbDJG9a4w==}
     engines: {node: ^10 || ^12 || >=14}
 
+  pusher.color@0.2.4:
+    resolution: {integrity: sha512-DT6ma337YAEGM67BPLhudTW1QqCxmI/9wVI3FMxZQ4mwkB8sQwAJZPeMMcYCI9yp9BdnLNh/5JHq/8ytmh6pVA==}
+
+  quadtree2@0.5.4:
+    resolution: {integrity: sha512-91mM5tFdSwXZw6K450rn9sJ1AESe465sPVxhEy/9i4syNckUF5YqCp06/ulogVkD/TdM9E4sP0YjlDbCuccnwA==}
+    engines: {node: '>= 0.10.0'}
+
   react-dom@19.2.7:
     resolution: {integrity: sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ==}
     peerDependencies:
@@ -425,6 +441,9 @@ packages:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
 
+  three@0.66.97:
+    resolution: {integrity: sha512-bGorVqJ2L/RgEYDdJ0O9Xv2pElEOE7ku0EbFROpHbpfk4xTOz0Pwe3F7iKbydMIbz9wi5b2qQAlwqPt/hLcaWA==}
+
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
@@ -432,10 +451,23 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  tween.js@0.13.0:
+    resolution: {integrity: sha512-Et5KCkGrpMOPrrxjKLqn/bzggA4xVbWrECBDfP1o8l3+FeiMXrKCWa5eacrXaJGOmVwhgI6BmhozyA0CPtk9XQ==}
+    deprecated: This package has moved to @tweenjs/tween.js. Please update your dependencies.
+
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
     hasBin: true
+
+  underscore@1.4.4:
+    resolution: {integrity: sha512-ZqGrAgaqqZM7LGRzNjLnw5elevWb5M8LEoDMadxIW3OWbcv72wMMgKdwOKpd5Fqxe8choLD8HN3iSj3TUh/giQ==}
+
+  vec2@1.4.0:
+    resolution: {integrity: sha512-CWbYQOUuAZ2iNjgMwGRqCGIWyMGHzq/mt1g6DAABXgVYn+OmFk3krFPY6SnY8bYtg37QbcXR62osDAKukLNpHQ==}
+
+  vec2@1.5.0:
+    resolution: {integrity: sha512-nm0BnIvyav5jp6iZNRJ5CMLauEB/PKXax8pBCAZSowuWrF5lCKNjq/Mh2wICyrpOfuU48nWX+urNQWQbpTF3eQ==}
 
   vite@8.1.4:
     resolution: {integrity: sha512-bTT9PsdWO+MQMNG9ZXIP/qM9wGh37DFxTV/sPq9cFpHr3w4jkgef032PkAL9jAqhk3Nz8NQw3O8n6/xFkqO4QQ==}
@@ -640,12 +672,23 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
+  encom-globe@0.5.4:
+    dependencies:
+      hexasphere.js: 0.2.2
+      pusher.color: 0.2.4
+      quadtree2: 0.5.4
+      three: 0.66.97
+      tween.js: 0.13.0
+      vec2: 1.5.0
+
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
 
   fsevents@2.3.3:
     optional: true
+
+  hexasphere.js@0.2.2: {}
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -708,6 +751,14 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
+  pusher.color@0.2.4:
+    dependencies:
+      underscore: 1.4.4
+
+  quadtree2@0.5.4:
+    dependencies:
+      vec2: 1.4.0
+
   react-dom@19.2.7(react@19.2.7):
     dependencies:
       react: 19.2.7
@@ -740,6 +791,8 @@ snapshots:
 
   source-map-js@1.2.1: {}
 
+  three@0.66.97: {}
+
   tinyglobby@0.2.17:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.5)
@@ -747,6 +800,8 @@ snapshots:
 
   tslib@2.8.1:
     optional: true
+
+  tween.js@0.13.0: {}
 
   typescript@7.0.2:
     optionalDependencies:
@@ -770,6 +825,12 @@ snapshots:
       '@typescript/typescript-sunos-x64': 7.0.2
       '@typescript/typescript-win32-arm64': 7.0.2
       '@typescript/typescript-win32-x64': 7.0.2
+
+  underscore@1.4.4: {}
+
+  vec2@1.4.0: {}
+
+  vec2@1.5.0: {}
 
   vite@8.1.4:
     dependencies:
