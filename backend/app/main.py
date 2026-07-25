@@ -292,7 +292,12 @@ async def _run_schedule_job(job_id: str, request: ScheduleRequest) -> None:
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "version": ENV.app_version, "revision": ENV.app_revision}
+
+
+@app.get("/api/version")
+async def version():
+    return {"version": ENV.app_version, "revision": ENV.app_revision}
 
 
 @app.get("/api/config")

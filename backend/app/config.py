@@ -26,6 +26,8 @@ class EnvironmentSettings:
     station_timezone: str
     database_path: Path
     log_level: str
+    app_version: str
+    app_revision: str
 
     @classmethod
     def load(cls) -> "EnvironmentSettings":
@@ -43,8 +45,9 @@ class EnvironmentSettings:
             station_timezone=timezone_name,
             database_path=Path(os.getenv("DATABASE_PATH", "./data/satscheduler.db")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            app_version=os.getenv("APP_VERSION", "dev").strip() or "dev",
+            app_revision=os.getenv("APP_REVISION", "local").strip() or "local",
         )
 
 
 ENV = EnvironmentSettings.load()
-

@@ -1,0 +1,8 @@
+services:
+  satscheduler:
+    build:
+      context: .
+      args:
+        APP_VERSION: dev
+        APP_REVISION: local
+    image: satscheduler-web:local

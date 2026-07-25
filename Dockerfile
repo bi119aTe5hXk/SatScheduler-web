@@ -8,10 +8,14 @@ COPY frontend/ ./
 RUN pnpm run build
 
 FROM debian:bookworm-slim AS runtime
+ARG APP_VERSION=dev
+ARG APP_REVISION=local
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH=/opt/venv/bin:$PATH
+    PATH=/opt/venv/bin:$PATH \
+    APP_VERSION=$APP_VERSION \
+    APP_REVISION=$APP_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates python3 python3-pip python3-venv python3-numpy \
     && rm -rf /var/lib/apt/lists/* \

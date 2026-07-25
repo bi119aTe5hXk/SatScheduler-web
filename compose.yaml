@@ -1,8 +1,6 @@
 services:
   satscheduler:
-    build:
-      context: .
-    image: satscheduler-web:local
+    image: ghcr.io/bi119ate5hxk/satscheduler-web:latest
     restart: unless-stopped
     ports:
       - "8080:8080"

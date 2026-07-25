@@ -63,7 +63,8 @@ CasaOS and low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-late
 ```bash
 cp .env.example .env
 # Edit .env
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 ```
 
 Open `http://HOST:8080`.
@@ -85,15 +86,68 @@ read them from the SatNOGS Network station endpoint. All API scheduling timestam
 SQLite data is kept in the Compose-managed `satscheduler_data` volume so the unprivileged runtime
 user can write safely on CasaOS hosts.
 
+The default Compose file pulls the published multi-architecture image from GHCR:
+
+```yaml
+image: ghcr.io/bi119ate5hxk/satscheduler-web:latest
+```
+
+To update an installed container:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+## Local development build
+
+Use `compose.dev.yaml` when building from the local checkout:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build
+```
+
+This keeps the normal deployment Compose file optimized for CasaOS and low-power hosts, while still
+allowing development builds without editing `compose.yaml`.
+
+## Publish images to GHCR
+
+The repository includes `.github/workflows/docker.yml`. It builds and pushes
+`ghcr.io/bi119ate5hxk/satscheduler-web` for:
+
+- `linux/amd64`
+- `linux/arm64`
+- `linux/arm/v7`
+
+Publishing rules:
+
+- Push to `main`: publishes `edge` and `sha-<commit>` tags.
+- Push a version tag such as `v1.2.3`: publishes `latest`, `1.2.3`, `1.2` and `sha-<commit>`.
+- Manual `workflow_dispatch`: can be started from the GitHub Actions tab.
+
+First-time GHCR setup:
+
+1. Push this repository to GitHub with the workflow file committed.
+2. Open the repository on GitHub, then open the `Actions` tab.
+3. If GitHub asks to enable workflows for the repository, enable them.
+4. Push to `main` or run the `Docker image` workflow manually.
+5. After the first successful run, open the package page under the repository or your GitHub
+   profile Packages section.
+6. If the package is private, change its visibility to public if you want unauthenticated users and
+   CasaOS hosts to pull it without `docker login ghcr.io`.
+
+No extra secret is required for publishing from GitHub Actions. The workflow uses GitHub's built-in
+`GITHUB_TOKEN` with `packages: write` permission.
+
 ## ARMv7
 
 The runtime uses Debian Bookworm slim and Debian's architecture-native NumPy package. The image is
-structured for `linux/amd64` and `linux/arm/v7`; both native ARM64 startup and a full ARMv7 image
-build have been verified. Build and publish the ARM image in CI rather than compiling scientific
-dependencies on the target device.
+structured for `linux/amd64`, `linux/arm64` and `linux/arm/v7`; both native ARM64 startup and a full
+ARMv7 image build have been verified. Build and publish the ARM image in CI rather than compiling
+scientific dependencies on the target device.
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm/v7 -t IMAGE --push .
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t IMAGE --push .
 ```
 
 ## Cache behavior
