@@ -121,8 +121,8 @@ The repository includes `.github/workflows/docker.yml`. It builds and pushes
 
 Publishing rules:
 
-- Push to `main`: publishes `edge` and `sha-<commit>` tags.
-- Push a version tag such as `v1.2.3`: publishes `latest`, `1.2.3`, `1.2` and `sha-<commit>`.
+- Push to `main`: publishes `latest`, `edge` and `sha-<commit>` tags.
+- Push a version tag such as `v1.2.3`: publishes `1.2.3`, `1.2` and `sha-<commit>`.
 - Manual `workflow_dispatch`: can be started from the GitHub Actions tab.
 
 First-time GHCR setup:
