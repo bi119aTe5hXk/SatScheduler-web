@@ -17,10 +17,31 @@ DB_BASE_URL = "https://db.satnogs.org/api"
 NETWORK_BASE_URL = "https://network.satnogs.org/api"
 ONE_HOUR = timedelta(hours=1)
 ONE_DAY = timedelta(days=1)
+MAX_OBSERVATION_ASSET_BYTES = 8 * 1024 * 1024
 
 
 class SatNOGSError(RuntimeError):
     pass
+
+
+def allowed_observation_asset_url(url: str) -> bool:
+    """Only proxy public media locations used by SatNOGS observations."""
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    path = parsed.path
+    if parsed.scheme != "https" or parsed.username or parsed.password or port:
+        return False
+    return (
+        host == "s3.eu-central-1.wasabisys.com"
+        and path.startswith("/satnogs-network/data_obs/")
+    ) or (
+        host == "network-satnogs.freetls.fastly.net"
+        and path.startswith("/media/data_obs/")
+    ) or (host == "network.satnogs.org" and path.startswith("/media/"))
 
 
 def merge_transmitter_insights(
@@ -296,6 +317,28 @@ class SatNOGSClient:
         if not isinstance(payload, dict):
             raise SatNOGSError("SatNOGS returned an invalid observation detail")
         return payload
+
+    async def observation_asset(self, url: str) -> tuple[bytes, str]:
+        if not allowed_observation_asset_url(url):
+            raise SatNOGSError("Unsupported observation data URL")
+        chunks: list[bytes] = []
+        size = 0
+        async with self.http.stream(
+            "GET", url, timeout=30, follow_redirects=False
+        ) as response:
+            if response.is_redirect:
+                raise SatNOGSError("Observation data URL redirected unexpectedly")
+            response.raise_for_status()
+            declared_size = int(response.headers.get("content-length") or 0)
+            if declared_size > MAX_OBSERVATION_ASSET_BYTES:
+                raise SatNOGSError("Observation data file is larger than 8 MiB")
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_OBSERVATION_ASSET_BYTES:
+                    raise SatNOGSError("Observation data file is larger than 8 MiB")
+                chunks.append(chunk)
+            content_type = response.headers.get("content-type", "application/octet-stream")
+        return b"".join(chunks), content_type.split(";", 1)[0]
 
     async def all_future_observations(
         self,

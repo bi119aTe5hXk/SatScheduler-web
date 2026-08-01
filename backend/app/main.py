@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.cache import PersistentCache
@@ -20,7 +20,7 @@ from app.groundtrack import observation_ground_track
 from app.import_export import export_configuration, import_configuration
 from app.jobs import AutomaticScheduler
 from app.planner import Planner
-from app.satnogs import SatNOGSClient
+from app.satnogs import SatNOGSClient, SatNOGSError
 from app.schemas import (
     PlanRequest,
     ReorderRequest,
@@ -565,6 +565,24 @@ async def observations_receptions(
 @app.get("/api/observations/{observation_id}")
 async def observation_detail(observation_id: int):
     return await client.observation(observation_id)
+
+
+@app.get("/api/observation-data")
+async def observation_data(url: str = Query(...)):
+    try:
+        content, content_type = await client.observation_asset(url)
+    except SatNOGSError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Unable to load observation data: {exc}") from exc
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/observations/{observation_id}/ground-track")

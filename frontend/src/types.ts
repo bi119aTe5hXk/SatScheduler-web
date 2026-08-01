@@ -114,7 +114,7 @@ export type Observation = {
   vetted_status?: string
   waterfall?: string
   payload?: string
-  demoddata?: Array<string | { url?: string; name?: string }>
+  demoddata?: Array<string | { payload_demod?: string; url?: string; name?: string }>
   archive_url?: string
   archived?: boolean
   observer?: string

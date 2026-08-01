@@ -19,3 +19,9 @@ def test_background_plan_and_schedule_status_routes_are_exposed():
     assert "get" in paths["/api/schedules/status"]
     assert "post" in paths["/api/schedules/start"]
     assert "post" in paths["/api/schedules/cancel"]
+
+
+def test_observation_data_proxy_route_is_exposed():
+    operation = app.openapi()["paths"]["/api/observation-data"]["get"]
+
+    assert {parameter["name"] for parameter in operation["parameters"]} == {"url"}

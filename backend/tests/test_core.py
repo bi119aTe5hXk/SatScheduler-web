@@ -21,7 +21,11 @@ from app.schemas import (
     StationConfig,
     WatchTarget,
 )
-from app.satnogs import SatNOGSClient, merge_transmitter_insights
+from app.satnogs import (
+    SatNOGSClient,
+    allowed_observation_asset_url,
+    merge_transmitter_insights,
+)
 from app.service import get_scheduler_settings
 from app.targets import TargetRepository
 
@@ -64,6 +68,20 @@ def make_pass(target: WatchTarget, peak_elevation: float) -> PredictedPass:
         peak_elevation=peak_elevation,
         azimuth_samples=[300, 0, 60],
         engine=PredictionEngineName.SKYFIELD,
+    )
+
+
+def test_observation_asset_proxy_only_accepts_satnogs_media_urls():
+    assert allowed_observation_asset_url(
+        "https://s3.eu-central-1.wasabisys.com/satnogs-network/data_obs/2026/8/data_file"
+    )
+    assert allowed_observation_asset_url(
+        "https://network-satnogs.freetls.fastly.net/media/data_obs/2026/data_file"
+    )
+    assert not allowed_observation_asset_url("http://network.satnogs.org/media/data")
+    assert not allowed_observation_asset_url("https://example.com/data")
+    assert not allowed_observation_asset_url(
+        "https://s3.eu-central-1.wasabisys.com/private/data"
     )
 
 

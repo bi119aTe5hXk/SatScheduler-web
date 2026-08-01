@@ -299,7 +299,7 @@ function Dashboard({ config, settings, targets, onNavigate, onNotify }: { config
     </section>
     <section className="split">
       <div className="panel overview-list"><div className="panel-title"><div><small>NEXT 6</small><h2>Upcoming List</h2></div><div className="button-row"><button className="ghost" disabled={refreshing} onClick={() => refreshTimeline(true).then(() => onNotify('Upcoming timeline refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('observations')}>View all →</button></div></div>{upcomingList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('observations', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>{observationDuration(item)} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!upcomingList.length && <div className="empty">No upcoming observations.</div>}</div>
-      <div className="panel overview-list"><div className="panel-title"><div><small>LATEST 6</small><h2>Reception List</h2></div><div className="button-row"><button className="ghost" disabled={refreshingReceptions} onClick={() => refreshReceptions(true).then(() => onNotify('Latest Reception page refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshingReceptions ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('receptions')}>View all →</button></div></div>{receptionList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('receptions', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small></div><div><strong>{formatUtc(item.end || item.start)}</strong><small>{item.vetted_status || 'unknown'} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!receptionList.length && <div className="empty">No recent receptions cached.</div>}</div>
+      <div className="panel overview-list"><div className="panel-title"><div><small>LATEST 6</small><h2>Reception List</h2></div><div className="button-row"><button className="ghost" disabled={refreshingReceptions} onClick={() => refreshReceptions(true).then(() => onNotify('Latest Reception page refreshed.', 'success')).catch(error => onNotify(String(error), 'error'))}>{refreshingReceptions ? 'Refreshing…' : 'Refresh'}</button><button className="ghost" onClick={() => onNavigate('receptions')}>View all →</button></div></div>{receptionList.map(item => <button className="overview-list-row" key={item.id} onClick={() => onNavigate('receptions', item.id)}><div><strong>{observationSatellite(item)}</strong><small>#{item.id} · {item.transmitter_mode || item.transmitter_description || 'Unknown mode'}</small><ReceptionAssetTags observation={item} /></div><div><strong>{formatUtc(item.end || item.start)}</strong><small>{item.vetted_status || 'unknown'} · {degrees(item.max_altitude)}</small></div><span>→</span></button>)}{!receptionList.length && <div className="empty">No recent receptions cached.</div>}</div>
     </section>
   </div>
 }
@@ -906,9 +906,92 @@ function ObservationList({ future, title, targets, selectedId, onNavigate, onNot
     {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{visibleItems.length} observations</span></div><Timeline observations={visibleItems} now={now} /></section>}
     {future && loading && <div className="fetch-progress"><span className="spinner" /><div><strong>{progress.page ? `Fetching page ${progress.page + 1}…` : 'Starting background update…'}</strong><small>{progress.page} page{progress.page === 1 ? '' : 's'} · {progress.records} observations loaded</small></div></div>}
     {!future && <><section className="reception-search"><label>Search loaded receptions<input type="search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Observation ID, satellite, alias, SatNOGS/NORAD ID, mode, frequency or observer" /></label>{searchQuery && <button className="ghost" onClick={() => setSearchQuery('')}>Clear</button>}<span>{visibleItems.length} matches</span></section><section className="reception-filters" aria-label="Reception status filter"><span>STATUS</span>{(['all', 'good', 'bad', 'unknown'] as const).map(status => <button key={status} className={receptionFilter === status ? 'active' : ''} onClick={() => setReceptionFilter(status)}>{status}<strong>{status === 'all' ? items.length : statusCounts[status]}</strong></button>)}<small>Filters apply locally to the {items.length} loaded records.</small></section></>}
-    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => onNavigate(future ? 'observations' : 'receptions', item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small></div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">{!future && searchQuery ? 'No loaded receptions match this search.' : !future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
+    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => onNavigate(future ? 'observations' : 'receptions', item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small>{!future && <ReceptionAssetTags observation={item} />}</div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">{!future && searchQuery ? 'No loaded receptions match this search.' : !future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
     {!future && cursor && <button className="load-more" onClick={() => loadReceptionPage()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}
   </div>
+}
+
+type DemodDataEntry = NonNullable<Observation['demoddata']>[number]
+
+function demodDataUrl(entry: DemodDataEntry): string | null {
+  if (typeof entry === 'string') return entry || null
+  return entry.payload_demod || entry.url || null
+}
+
+function demodDataName(entry: DemodDataEntry, index: number): string {
+  if (typeof entry !== 'string' && entry.name) return entry.name
+  const url = demodDataUrl(entry)
+  if (!url) return `Data ${index + 1}`
+  try {
+    return decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || `Data ${index + 1}`)
+  } catch {
+    return `Data ${index + 1}`
+  }
+}
+
+function isImageData(url: string): boolean {
+  try { return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(new URL(url).pathname) }
+  catch { return false }
+}
+
+function ReceptionAssetTags({ observation }: { observation: Observation }) {
+  const hasData = Boolean(observation.demoddata?.some(entry => demodDataUrl(entry)))
+  if (!observation.payload && !observation.waterfall && !hasData) return null
+  return <span className="reception-asset-tags" aria-label="Available reception files">
+    {observation.payload && <span className="reception-asset-tag audio">Audio</span>}
+    {observation.waterfall && <span className="reception-asset-tag waterfall">Waterfall</span>}
+    {hasData && <span className="reception-asset-tag data">Data</span>}
+  </span>
+}
+
+function asciiData(bytes: Uint8Array): string {
+  let result = ''
+  for (const byte of bytes) {
+    if (byte === 9 || byte === 10 || byte === 13) result += String.fromCharCode(byte)
+    else result += byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.'
+  }
+  return result
+}
+
+function hexData(bytes: Uint8Array): string {
+  const lines: string[] = []
+  for (let offset = 0; offset < bytes.length; offset += 16) {
+    const row = bytes.slice(offset, offset + 16)
+    lines.push(`${offset.toString(16).padStart(8, '0')}  ${Array.from(row, byte => byte.toString(16).padStart(2, '0')).join(' ')}`)
+  }
+  return lines.join('\n')
+}
+
+function DemodDataPanel({ observationId, entries }: { observationId: number; entries: DemodDataEntry[] }) {
+  const available = useMemo(() => entries.map((entry, originalIndex) => ({ entry, originalIndex, url: demodDataUrl(entry) })).filter((item): item is { entry: DemodDataEntry; originalIndex: number; url: string } => Boolean(item.url)), [entries])
+  const [selected, setSelected] = useState(0), [mode, setMode] = useState<'ascii' | 'hex'>('ascii')
+  const [bytes, setBytes] = useState<Uint8Array | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState('')
+  const cache = useRef(new Map<string, Uint8Array>())
+  const current = available[selected] || null
+  const image = current ? isImageData(current.url) : false
+  useEffect(() => { if (selected >= available.length) setSelected(0) }, [available.length, selected])
+  useEffect(() => {
+    setBytes(null); setError('')
+    if (!current || image) { setLoading(false); return }
+    const cached = cache.current.get(current.url)
+    if (cached) { setBytes(cached); setLoading(false); return }
+    const controller = new AbortController()
+    setLoading(true)
+    fetch(`/api/observation-data?url=${encodeURIComponent(current.url)}`, { signal: controller.signal })
+      .then(async response => { if (!response.ok) throw new Error(await response.text() || `${response.status} ${response.statusText}`); return new Uint8Array(await response.arrayBuffer()) })
+      .then(value => { cache.current.set(current.url, value); setBytes(value) })
+      .catch(reason => { if ((reason as Error).name !== 'AbortError') setError(String(reason)) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [current?.url, image])
+  const visibleBytes = useMemo(() => bytes?.slice(0, 512 * 1024) || null, [bytes])
+  const content = useMemo(() => visibleBytes ? (mode === 'ascii' ? asciiData(visibleBytes) : hexData(visibleBytes)) : '', [visibleBytes, mode])
+  return <section className="panel demod-data-panel"><div className="panel-title"><div><small>DECODED DATA</small><h2>Data</h2></div>{current && <a href={current.url} target="_blank" rel="noreferrer">Open original ↗</a>}</div>
+    {!available.length ? <div className="empty">No decoded data was uploaded.</div> : <>
+      <div className="demod-data-toolbar"><label>File<select value={selected} onChange={event => setSelected(Number(event.target.value))}>{available.map((item, index) => <option value={index} key={`${item.url}-${index}`}>{index + 1}. {demodDataName(item.entry, item.originalIndex)}</option>)}</select></label>{!image && <div className="demod-mode" aria-label="Data display mode"><button className={mode === 'ascii' ? 'active' : ''} onClick={() => setMode('ascii')}>ASCII</button><button className={mode === 'hex' ? 'active' : ''} onClick={() => setMode('hex')}>HEX</button></div>}<span>{available.length} file{available.length === 1 ? '' : 's'}</span></div>
+      {image ? <a className="demod-image-link" href={current!.url} target="_blank" rel="noreferrer"><img src={current!.url} alt={`Decoded image for observation ${observationId}`} loading="lazy" /></a> : loading ? <div className="catalog-loading"><span className="spinner" /> Loading decoded data…</div> : error ? <div className="empty">Unable to load this data file: {error}</div> : <><pre className={`demod-data-content ${mode}`}>{content || 'This data file is empty.'}</pre>{bytes && bytes.length > 512 * 1024 && <p className="muted">Preview limited to the first 512 KiB. Open the original file to view all {bytes.length.toLocaleString()} bytes.</p>}</>}
+    </>}
+  </section>
 }
 
 function ObservationDetail({ observationId, routePage, previousId, nextId, onBack, onNavigate }: { observationId: number; routePage: 'observations' | 'receptions'; previousId: number | null; nextId: number | null; onBack: () => void; onNavigate: (page: Page, observationId?: number | null, replace?: boolean) => void }) {
@@ -923,8 +1006,8 @@ function ObservationDetail({ observationId, routePage, previousId, nextId, onBac
   const metadata = observationMetadata(item), radio = metadata?.radio, parameters = radio?.parameters || {}, demoddata = item.demoddata || []
   return <div className="page observation-detail"><PageHeader eyebrow={`${detailLabel} / #${item.id}`} title={observationSatellite(item)} action={detailActions} />
     <section className="observation-detail-hero"><div><span className={`observation-status ${item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'finished'}`}>{item.vetted_status || item.status || 'unknown'}</span><strong>{formatUtc(item.start)}</strong><small>{formatUtc(item.end)} · {observationDuration(item)}</small></div><div><small>TRANSMITTER</small><strong>{item.transmitter_description || item.transmitter_uuid || 'Unknown transmitter'}</strong><span>{frequency(observationFrequency(item))} · {item.transmitter_mode || 'Unknown mode'}{item.transmitter_baud ? ` · ${item.transmitter_baud.toLocaleString()} baud` : ''}</span></div><div><small>GROUND STATION</small><strong>{item.station_name || `Station ${item.ground_station || '—'}`}</strong><span>{item.station_lat ?? '—'}, {item.station_lng ?? '—'} · {item.station_alt ?? '—'} m</span></div></section>
-    {future ? <section className="upcoming-detail-tracks"><div className="panel upcoming-detail-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div><div className="panel upcoming-detail-map"><WorldTrackMap observation={item} /></div></section> : <><section className="reception-media-grid"><div className="panel reception-audio"><div className="panel-title"><div><small>AUDIO RECORDING</small><h2>Listen</h2></div></div>{item.payload ? <audio controls preload="metadata" src={item.payload} /> : <p className="muted">No audio was uploaded.</p>}</div><div className="panel reception-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div></section><section className="panel waterfall-panel"><div className="panel-title"><div><small>SPECTRUM</small><h2>Full-size waterfall</h2></div>{item.waterfall && <a href={item.waterfall} target="_blank" rel="noreferrer">Open original / zoom ↗</a>}</div>{item.waterfall ? <a className="waterfall-image-link" href={item.waterfall} target="_blank" rel="noreferrer" title="Open the original image for browser zoom and panning"><img src={item.waterfall} alt={`Waterfall for observation ${item.id}`} loading="lazy" /></a> : <div className="empty">No waterfall was uploaded.</div>}</section></>}
-    <section className="split reception-details"><div className="panel"><div className="panel-title"><div><small>PASS GEOMETRY</small><h2>Observation data</h2></div></div><dl className="detail-facts"><dt>Maximum elevation</dt><dd>{degrees(item.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(item.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(item.set_azimuth)}</dd><dt>NORAD catalog ID</dt><dd>{item.norad_cat_id || '—'}</dd><dt>SatNOGS satellite ID</dt><dd>{item.sat_id || '—'}</dd><dt>Observer</dt><dd>{item.observer || '—'}</dd><dt>Client version</dt><dd>{item.client_version || '—'}</dd><dt>Radio</dt><dd>{radio?.name || '—'}{radio?.version ? ` ${radio.version}` : ''}</dd><dt>Receiver gain</dt><dd>{parameters.gain ? `${parameters.gain} dB` : '—'}</dd><dt>Sample rate</dt><dd>{parameters['samp-rate-rx'] || '—'}</dd></dl></div><div className="panel"><div className="panel-title"><div><small>ORBITAL ELEMENTS</small><h2>TLE used for observation</h2></div><span className="muted">{item.tle_source || 'Unknown source'}</span></div><pre className="tle-block">{[item.tle0, item.tle1, item.tle2].filter(Boolean).join('\n') || 'No TLE available.'}</pre>{!future && <><div className="detail-assets"><a className={`ghost button-link ${item.payload ? '' : 'disabled'}`} href={item.payload || undefined} target="_blank" rel="noreferrer">Audio file</a><a className={`ghost button-link ${item.archive_url ? '' : 'disabled'}`} href={item.archive_url || undefined} target="_blank" rel="noreferrer">Archive</a></div>{demoddata.length > 0 && <div className="demod-list"><small>DECODED DATA</small>{demoddata.map((entry, index) => { const url = typeof entry === 'string' ? entry : entry.url; return url ? <a key={url} href={url} target="_blank" rel="noreferrer">{typeof entry === 'string' ? `Frame ${index + 1}` : entry.name || `Frame ${index + 1}`}</a> : null })}</div>}</>}</div></section>
+    {future ? <section className="upcoming-detail-tracks"><div className="panel upcoming-detail-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div><div className="panel upcoming-detail-map"><WorldTrackMap observation={item} /></div></section> : <><section className="reception-media-grid"><div className="panel reception-audio"><div className="panel-title"><div><small>AUDIO RECORDING</small><h2>Listen</h2></div></div>{item.payload ? <audio controls preload="metadata" src={item.payload} /> : <p className="muted">No audio was uploaded.</p>}</div><div className="panel reception-polar"><div className="panel-title"><div><small>PASS TRACK</small><h2>Polar plot</h2></div></div><PolarPlot observation={item} /></div></section><section className="panel waterfall-panel"><div className="panel-title"><div><small>SPECTRUM</small><h2>Full-size waterfall</h2></div>{item.waterfall && <a href={item.waterfall} target="_blank" rel="noreferrer">Open original / zoom ↗</a>}</div>{item.waterfall ? <a className="waterfall-image-link" href={item.waterfall} target="_blank" rel="noreferrer" title="Open the original image for browser zoom and panning"><img src={item.waterfall} alt={`Waterfall for observation ${item.id}`} loading="lazy" /></a> : <div className="empty">No waterfall was uploaded.</div>}</section><DemodDataPanel observationId={item.id} entries={demoddata} /></>}
+    <section className="split reception-details"><div className="panel"><div className="panel-title"><div><small>PASS GEOMETRY</small><h2>Observation data</h2></div></div><dl className="detail-facts"><dt>Maximum elevation</dt><dd>{degrees(item.max_altitude)}</dd><dt>Rise azimuth</dt><dd>{degrees(item.rise_azimuth)}</dd><dt>Set azimuth</dt><dd>{degrees(item.set_azimuth)}</dd><dt>NORAD catalog ID</dt><dd>{item.norad_cat_id || '—'}</dd><dt>SatNOGS satellite ID</dt><dd>{item.sat_id || '—'}</dd><dt>Observer</dt><dd>{item.observer || '—'}</dd><dt>Client version</dt><dd>{item.client_version || '—'}</dd><dt>Radio</dt><dd>{radio?.name || '—'}{radio?.version ? ` ${radio.version}` : ''}</dd><dt>Receiver gain</dt><dd>{parameters.gain ? `${parameters.gain} dB` : '—'}</dd><dt>Sample rate</dt><dd>{parameters['samp-rate-rx'] || '—'}</dd></dl></div><div className="panel"><div className="panel-title"><div><small>ORBITAL ELEMENTS</small><h2>TLE used for observation</h2></div><span className="muted">{item.tle_source || 'Unknown source'}</span></div><pre className="tle-block">{[item.tle0, item.tle1, item.tle2].filter(Boolean).join('\n') || 'No TLE available.'}</pre>{!future && <div className="detail-assets"><a className={`ghost button-link ${item.payload ? '' : 'disabled'}`} href={item.payload || undefined} target="_blank" rel="noreferrer">Audio file</a><a className={`ghost button-link ${item.archive_url ? '' : 'disabled'}`} href={item.archive_url || undefined} target="_blank" rel="noreferrer">Archive</a></div>}</div></section>
   </div>
 }
 
