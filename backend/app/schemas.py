@@ -84,6 +84,7 @@ class SchedulerSettings(BaseModel):
     upcoming_auto_refresh_enabled: bool = False
     upcoming_auto_refresh_hours: int = Field(default=6, ge=1, le=24)
     overview_globe_enabled: bool = True
+    reception_health_warning_enabled: bool = True
     horizon_hours: float = Field(default=48, gt=0, le=48)
     lead_minutes: int = Field(default=10, ge=1, le=180)
     satellites_per_run: int = Field(default=15, ge=1, le=50)

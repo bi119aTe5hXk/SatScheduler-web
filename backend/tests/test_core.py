@@ -102,6 +102,10 @@ def test_upcoming_refresh_job_is_independent_from_batch_schedule(database: Datab
     assert refresh_job.trigger.interval == timedelta(hours=12)
 
 
+def test_reception_health_warning_is_enabled_by_default():
+    assert SchedulerSettings().reception_health_warning_enabled is True
+
+
 @pytest.mark.asyncio
 async def test_persistent_cache_coalesces_fresh_value(database: Database):
     cache = PersistentCache(database)
