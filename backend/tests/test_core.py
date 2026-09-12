@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.cache import PersistentCache
@@ -145,6 +146,66 @@ async def test_satnogs_requests_share_configurable_interval(database: Database, 
 
     assert len(started) == 2
     assert started[1] - started[0] >= 0.035
+
+
+@pytest.mark.asyncio
+async def test_satellite_catalog_uses_current_in_orbit_filter(
+    database: Database, monkeypatch
+):
+    client = SatNOGSClient(PersistentCache(database), "")
+    requests: list[dict | None] = []
+
+    class Response:
+        @staticmethod
+        def json():
+            return [{"sat_id": "CURRENT", "status": "in orbit"}]
+
+    async def fake_get(url, params=None):
+        requests.append(params)
+        return Response()
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    payload, _ = await client.satellites()
+    await client.close()
+
+    assert payload == [{"sat_id": "CURRENT", "status": "in orbit"}]
+    assert requests == [{"status": "in orbit"}]
+    assert PersistentCache(database).get_entry("satellites:in-orbit") is not None
+    assert PersistentCache(database).get_entry("satellites:alive") is None
+
+
+@pytest.mark.asyncio
+async def test_satellite_catalog_falls_back_to_local_status_filter(
+    database: Database, monkeypatch
+):
+    client = SatNOGSClient(PersistentCache(database), "")
+    requests: list[dict | None] = []
+
+    class Response:
+        @staticmethod
+        def json():
+            return [
+                {"sat_id": "CURRENT", "status": "In Orbit"},
+                {"sat_id": "OLD", "status": "re-entered"},
+                {"sat_id": "FUTURE", "status": "future"},
+            ]
+
+    async def fake_get(url, params=None):
+        requests.append(params)
+        if params:
+            request = httpx.Request("GET", url)
+            response = httpx.Response(400, request=request)
+            raise httpx.HTTPStatusError(
+                "invalid status filter", request=request, response=response
+            )
+        return Response()
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    payload, _ = await client.satellites()
+    await client.close()
+
+    assert payload == [{"sat_id": "CURRENT", "status": "In Orbit"}]
+    assert requests == [{"status": "in orbit"}, None]
 
 
 @pytest.mark.asyncio

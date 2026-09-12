@@ -126,11 +126,28 @@ class SatNOGSClient:
 
     async def satellites(self, force: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         async def fetch() -> Any:
-            response = await self._get(f"{DB_BASE_URL}/satellites/", {"status": "alive"})
-            return response.json()
+            try:
+                response = await self._get(
+                    f"{DB_BASE_URL}/satellites/", {"status": "in orbit"}
+                )
+                return response.json()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 400:
+                    raise
+                # Compatibility fallback for a future DB API filter change. Keep
+                # the scheduler catalog limited to currently orbiting satellites.
+                response = await self._get(f"{DB_BASE_URL}/satellites/")
+                payload = response.json()
+                if not isinstance(payload, list):
+                    raise SatNOGSError("SatNOGS returned an invalid satellite catalog")
+                return [
+                    item
+                    for item in payload
+                    if str(item.get("status") or "").strip().casefold() == "in orbit"
+                ]
 
         return await self.cache.get_or_fetch(
-            "satellites:alive", "satellites", ONE_HOUR, fetch, force=force
+            "satellites:in-orbit", "satellites", ONE_HOUR, fetch, force=force
         )
 
     async def transmitters(
