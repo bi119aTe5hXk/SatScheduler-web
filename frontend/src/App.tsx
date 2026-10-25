@@ -214,6 +214,12 @@ export default function App() {
     </aside>
     <GlobalUtcClock now={now} />
     <main>
+      <div className="system-bar" aria-label="SatNOGS station link status">
+        <span><i /> SATNOGS MISSION CONTROL</span>
+        <span className="system-bar-channel">CH // {config?.station?.station_id || '----'}</span>
+        <span className="system-bar-clock">{now.toISOString().slice(11, 19)} UTC</span>
+        <span className="system-bar-link">{config?.station ? 'STATION LINK ONLINE' : 'STATION LINK STANDBY'}</span>
+      </div>
       {notice && <button className={`notice ${notice.tone}`} onClick={() => setNotice(null)}>{notice.message}</button>}
       {page === 'dashboard' && <Dashboard config={config} settings={settings} targets={targets} onNavigate={navigate} onNotify={notify} />}
       {page === 'targets' && <Targets targets={targets} onChanged={reload} onNotify={notify} />}

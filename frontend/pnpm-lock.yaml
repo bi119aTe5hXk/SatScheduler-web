@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@fontsource/orbitron':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/share-tech-mono':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@vitejs/plugin-react':
         specifier: 6.0.3
         version: 6.0.3(vite@8.1.4)
@@ -44,6 +50,12 @@ packages:
 
   '@emnapi/wasi-threads@1.2.2':
     resolution: {integrity: sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA==}
+
+  '@fontsource/orbitron@5.3.0':
+    resolution: {integrity: sha512-+BhPsbUAo/AF7sRcf+TEexm+EWWkgTiR9Zwb7AhYIPkc5oplfvw0C45Oc2xlKPhwVEmxG8hHuA6/Ansbl+Bc6w==}
+
+  '@fontsource/share-tech-mono@5.3.0':
+    resolution: {integrity: sha512-hVEzVCzEid/fBfhggMyvkfDzn9ODrMihxC0EiOeQK3BuQNvdjmith2ERnoDNUkbW8zhufbKNuCgaSoT8LUNpuQ==}
 
   '@napi-rs/wasm-runtime@1.1.6':
     resolution: {integrity: sha512-ZLv/JdUfkvOy9eCnnBaGfiO+XimbjebAeO+MRQqD/B+FR1tnRN0tpKSJHRbE8sFfS6aqsXZ67TQjfwfsxULVbg==}
@@ -529,6 +541,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
     optional: true
+
+  '@fontsource/orbitron@5.3.0': {}
+
+  '@fontsource/share-tech-mono@5.3.0': {}
 
   '@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)':
     dependencies:
