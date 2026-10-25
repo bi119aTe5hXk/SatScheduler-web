@@ -31,14 +31,24 @@ type EncomSatellite = { remove: () => void; mesh?: EncomSatelliteMesh; toString?
 type EncomGlobeConstructor = new (width: number, height: number, options: Record<string, unknown>) => EncomGlobeInstance
 type EncomWindow = Window & { ENCOM?: { Globe?: EncomGlobeConstructor } }
 
-const NAV: Array<{ id: Page; label: string; mark: string }> = [
-  { id: 'dashboard', label: 'Overview', mark: 'OV' },
-  { id: 'targets', label: 'Satellites', mark: 'SAT' },
-  { id: 'schedule', label: 'Schedule', mark: 'SCH' },
-  { id: 'observations', label: 'Upcoming', mark: 'UP' },
-  { id: 'receptions', label: 'Receptions', mark: 'RX' },
-  { id: 'settings', label: 'Settings', mark: 'SET' },
+const NAV: Array<{ id: Page; label: string }> = [
+  { id: 'dashboard', label: 'Overview' },
+  { id: 'targets', label: 'Satellites' },
+  { id: 'schedule', label: 'Schedule' },
+  { id: 'observations', label: 'Upcoming' },
+  { id: 'receptions', label: 'Receptions' },
+  { id: 'settings', label: 'Settings' },
 ]
+
+function NavIcon({ page }: { page: Page }) {
+  const common = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'square' as const, strokeLinejoin: 'miter' as const, 'aria-hidden': true }
+  if (page === 'dashboard') return <svg {...common}><path d="M3 4h18v16H3zM3 9h18M9 9v11"/><path d="m12 16 2-3 2 2 3-4"/></svg>
+  if (page === 'targets') return <svg {...common}><path d="m9 9 6 6M8 12l-5 2 7 7 2-5M12 8l2-5 7 7-5 2M5 19l-2 2M19 5l2-2"/><path d="m9 9 3-3 6 6-3 3z"/></svg>
+  if (page === 'schedule') return <svg {...common}><path d="M4 5h16v16H4zM4 9h16M8 3v4M16 3v4"/><path d="M8 13h3v3H8zM14 13h2M14 16h3"/></svg>
+  if (page === 'observations') return <svg {...common}><path d="M3 18h18M5 15l4-4 3 2 6-7"/><path d="M14 6h4v4M5 5v10"/><circle cx="9" cy="11" r="1"/></svg>
+  if (page === 'receptions') return <svg {...common}><path d="M12 14v7M8 21h8M12 14l-3-3M12 14l3-3"/><path d="M7 7a7 7 0 0 0 0 10M17 7a7 7 0 0 1 0 10M4 4a11 11 0 0 0 0 16M20 4a11 11 0 0 1 0 16"/></svg>
+  return <svg {...common}><path d="M4 6h16M4 12h16M4 18h16"/><path d="M8 3v6M16 9v6M10 15v6"/><rect x="6" y="4" width="4" height="4"/><rect x="14" y="10" width="4" height="4"/><rect x="8" y="16" width="4" height="4"/></svg>
+}
 
 function parseEncomGrid(source: string): { tiles: unknown[] } {
   const match = source.match(/^var\s+grid\s*=\s*(.*);?\s*$/s)
@@ -206,7 +216,7 @@ export default function App() {
     <aside className="rail">
       <div className="brand"><span className="brand-orbit" /> <span>SatScheduler</span></div>
       <nav>{NAV.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => navigate(item.id)}>
-        <span className="nav-mark">{item.mark}</span><span>{item.label}</span>
+        <span className="nav-mark"><NavIcon page={item.id} /></span><span>{item.label}</span>
       </button>)}</nav>
       <div className="station-chip"><span className={config?.station ? 'signal online' : 'signal'} />
         <div><strong>{config?.station?.station_name || `Station ${config?.station?.station_id || '—'}`}</strong><small>{config?.station ? 'Configuration ready' : 'Needs configuration'}</small></div>
@@ -301,9 +311,9 @@ function Dashboard({ config, settings, targets, onNavigate, onNotify }: { config
     const latest = [...receptions].sort((a, b) => new Date(b.end || b.start || 0).getTime() - new Date(a.end || a.start || 0).getTime()).slice(0, 5)
     return latest.length === 5 && latest.every(item => !item.payload && !item.waterfall)
   }, [receptions])
-  return <div className="page">
+  return <div className="page dashboard-page">
     {settings.reception_health_warning_enabled && unhealthyReceptions && !receptionWarningDismissed && <div className="reception-health-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="reception-health-title"><div className="reception-health-warning"><span className="reception-health-icon">!</span><div><small>RECEPTION HEALTH WARNING</small><h2 id="reception-health-title">The receiving equipment may need attention</h2><p>The latest five receptions contain neither Audio nor Waterfall files. Recent observations may not have been received correctly. Please check the receiver, antenna, SatNOGS client and upload connection.</p></div><div className="button-row"><button className="ghost" onClick={() => setReceptionWarningDismissed(true)}>Dismiss</button><button className="danger" onClick={() => onNavigate('receptions')}>Open Receptions</button></div></div></div>}
-    <PageHeader eyebrow="GROUND CONTROL / SINGLE STATION" title="Observation overview" action={<button className="primary" onClick={() => onNavigate('schedule')}>Build schedule</button>} />
+    <PageHeader eyebrow="GROUND CONTROL / SINGLE STATION" title="Observation overview" />
     <section className="hero-grid">
       <div className="utc-card"><small>LIVE UNIVERSAL TIME</small><strong>{now.toISOString().slice(11, 19)}</strong><span>{now.toISOString().slice(0, 10)} · UTC</span></div>
       <Metric label="Enabled satellites" value={String(targets.filter(t => t.enabled).length)} detail={`${targets.length} total watch targets`} />

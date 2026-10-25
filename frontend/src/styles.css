@@ -163,6 +163,7 @@ nav button.active{
 }
 nav button.active::after{background:var(--lime);border-color:var(--lime);box-shadow:0 0 8px var(--lime)}
 .nav-mark{width:34px;color:var(--cyan);font-size:8px;letter-spacing:.14em}
+.nav-mark svg{display:block;width:22px;height:22px;overflow:visible;filter:drop-shadow(0 0 4px #35f2f255)}
 .station-chip{position:relative;border-top:1px solid var(--cyan);padding:16px 8px 3px}
 .station-chip::before{content:"STATION NODE";position:absolute;top:-7px;left:8px;padding:0 5px;background:#041016;color:var(--cyan);font-size:7px;letter-spacing:.16em}
 .station-chip strong{font-family:"Share Tech Mono",monospace;text-transform:uppercase}
@@ -191,6 +192,7 @@ main{position:relative;min-height:100vh;padding-top:28px}
 .system-bar-link{color:var(--lime)}
 @keyframes system-pulse{50%{opacity:.25}}
 .page{max-width:none;padding-top:34px}
+.dashboard-page{width:100%;margin-left:0;margin-right:0}
 .page-header{position:relative;margin-bottom:24px;padding-bottom:15px;border-bottom:1px solid #1a5661}
 .page-header::after{content:"";position:absolute;left:0;bottom:-1px;width:110px;height:2px;background:var(--cyan);box-shadow:0 0 14px var(--cyan)}
 .page-header small,.panel-title small,.utc-card small,.metric small{font-weight:700;letter-spacing:.18em}
@@ -218,8 +220,9 @@ h2{letter-spacing:.025em}
   opacity:.65;
 }
 .panel:hover{border-color:#277381}
-.panel-title{padding-bottom:10px;border-bottom:1px solid #123b44}
-.panel-title::before{content:"//";margin-right:7px;color:var(--cyan);font-size:9px;letter-spacing:-.1em}
+.panel-title{position:relative;padding:0 0 10px 18px;border-bottom:1px solid #123b44;justify-content:flex-start}
+.panel-title::before{content:"//";position:absolute;left:0;top:3px;color:var(--cyan);font-size:9px;letter-spacing:-.1em}
+.panel-title>.timeline-update-actions,.panel-title>.button-row,.panel-title>.observation-status,.panel-title>a{margin-left:auto}
 .utc-card strong,.metric strong{font-weight:400;text-shadow:0 0 18px currentColor}
 .primary,.ghost,.danger,.load-more,input,select,textarea,
 .target-bulk-toolbar,.satellite-results,.transmitter-choice,.timeline-update-status,
@@ -280,6 +283,7 @@ input:focus,select:focus,textarea:focus{box-shadow:inset 3px 0 var(--cyan),0 0 1
   .rail nav{border-top:0;padding-top:0}
   .rail nav button{min-height:50px;padding:5px 2px;letter-spacing:0}
   .rail nav button::after{display:none}
+  .nav-mark svg{width:20px;height:20px;stroke-width:1.7}
   .system-bar{position:fixed;top:0;height:24px;padding:0 10px;gap:10px}
   .system-bar-channel{display:none}
   .system-bar-clock{margin-left:auto;font-size:7px}
