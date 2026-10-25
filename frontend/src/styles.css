@@ -222,7 +222,8 @@ h2{letter-spacing:.025em}
 .panel:hover{border-color:#277381}
 .panel-title{position:relative;padding:0 0 10px 18px;border-bottom:1px solid #123b44;justify-content:flex-start}
 .panel-title::before{content:"//";position:absolute;left:0;top:3px;color:var(--cyan);font-size:9px;letter-spacing:-.1em}
-.panel-title>.timeline-update-actions,.panel-title>.button-row,.panel-title>.observation-status,.panel-title>a{margin-left:auto}
+.panel-title>.timeline-update-actions,.panel-title>.button-row,.panel-title>.observation-status,.panel-title>.timeline-count,.panel-title>.globe-controls,.panel-title>a{margin-left:auto}
+.panel-title>.timeline-count,.panel-title>.globe-controls{flex:none;align-self:center}
 .station-timeline-panel{z-index:25;overflow:visible;clip-path:none}
 .station-timeline-panel .timeline-event:hover{z-index:100}
 .station-timeline-panel .timeline-tooltip{z-index:1000}
