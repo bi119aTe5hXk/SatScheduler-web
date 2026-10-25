@@ -1,7 +1,7 @@
 # SatScheduler Web
 
-SatScheduler Web is a single-ground-station SatNOGS observation planner for Docker, CasaOS and
-low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-later.
+SatScheduler Web is a single-ground-station SatNOGS observation planner designed to run with
+Docker on standard 64-bit Linux hosts. It is licensed under AGPL-3.0-or-later.
 
 ## Features
 
@@ -14,7 +14,7 @@ low-power Debian/Armbian hosts. It is licensed under AGPL-3.0-or-later.
 - Reception archive with status filtering, search, waterfall/audio/detail pages.
 - Server-side SQLite cache shared by all browsers/devices.
 - iOS-compatible watch-list import/export.
-- Docker image support for `linux/amd64`, `linux/arm64` and `linux/arm/v7`.
+- Docker image support for `linux/amd64` and `linux/arm64`.
 
 ## Run with Docker Compose
 
@@ -68,7 +68,7 @@ Use the development override when building from source:
 docker compose -f compose.yaml -f compose.dev.yaml up --build
 ```
 
-This keeps the normal `compose.yaml` suitable for CasaOS and low-power hosts.
+This keeps the normal `compose.yaml` focused on pulling the published image for Linux deployment.
 
 ## Cache behavior
 
