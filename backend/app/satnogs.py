@@ -150,6 +150,39 @@ class SatNOGSClient:
             "satellites:in-orbit", "satellites", ONE_HOUR, fetch, force=force
         )
 
+    async def satellite(
+        self, sat_id: str, force: bool = False
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        normalized_sat_id = sat_id.strip()
+
+        async def fetch() -> Any:
+            response = await self._get(
+                f"{DB_BASE_URL}/satellites/", {"sat_id": normalized_sat_id}
+            )
+            payload = response.json()
+            if isinstance(payload, dict):
+                payload = payload.get("results", [])
+            if not isinstance(payload, list):
+                raise SatNOGSError("SatNOGS returned an invalid satellite lookup")
+            exact = next(
+                (
+                    item
+                    for item in payload
+                    if str(item.get("sat_id") or "").casefold()
+                    == normalized_sat_id.casefold()
+                ),
+                None,
+            )
+            return exact or (payload[0] if payload else None)
+
+        return await self.cache.get_or_fetch(
+            f"satellite:{normalized_sat_id.casefold()}",
+            "satellite",
+            ONE_HOUR,
+            fetch,
+            force=force,
+        )
+
     async def transmitters(
         self, sat_id: str, force: bool = False
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:

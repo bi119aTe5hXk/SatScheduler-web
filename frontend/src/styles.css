@@ -196,6 +196,11 @@ main{position:relative;min-height:100vh;padding-top:28px}
 .page-header{position:relative;margin-bottom:24px;padding-bottom:15px;border-bottom:1px solid #1a5661}
 .page-header::after{content:"";position:absolute;left:0;bottom:-1px;width:110px;height:2px;background:var(--cyan);box-shadow:0 0 14px var(--cyan)}
 .page-header small,.panel-title small,.utc-card small,.metric small{font-weight:700;letter-spacing:.18em}
+.satellite-aliases{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.satellite-alias-tag{position:relative;display:inline-flex;align-items:center;min-height:20px;padding:3px 9px 3px 16px;border:1px solid #2b6973;background:linear-gradient(90deg,#0a3038cc,#06171dcc);color:#aafcff;font:700 8px/1 var(--font-terminal);letter-spacing:.08em;text-transform:uppercase;clip-path:polygon(0 0,calc(100% - 5px) 0,100% 5px,100% 100%,4px 100%,0 calc(100% - 4px));box-shadow:inset 0 0 12px #35f2f20d,0 0 8px #35f2f212}
+.satellite-alias-tag::before{content:"";position:absolute;left:6px;width:4px;height:4px;background:var(--lime);box-shadow:0 0 6px var(--lime)}
+.next-observation .panel-title>div:first-child,.page-header>div:first-child{min-width:0}
+.next-observation .satellite-aliases{margin-top:7px}
 h1,h2{font-family:var(--font-display);text-transform:uppercase}
 h1{color:#e9fdff;font-size:clamp(25px,3.3vw,42px);font-weight:500;letter-spacing:.035em;text-shadow:0 0 22px #35f2f22b}
 h2{letter-spacing:.025em}

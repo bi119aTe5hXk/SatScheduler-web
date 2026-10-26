@@ -347,6 +347,14 @@ async def satellites(force: bool = False):
     return {"results": payload, "cache": metadata}
 
 
+@app.get("/api/satellites/{sat_id}")
+async def satellite(sat_id: str, force: bool = False):
+    payload, metadata = await client.satellite(sat_id, force=force)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Satellite not found")
+    return {"result": payload, "cache": metadata}
+
+
 @app.get("/api/satellites/{sat_id}/transmitters")
 async def transmitters(sat_id: str, force: bool = False):
     payload, metadata = await client.transmitters(sat_id, force=force)

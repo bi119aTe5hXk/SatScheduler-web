@@ -25,3 +25,12 @@ def test_observation_data_proxy_route_is_exposed():
     operation = app.openapi()["paths"]["/api/observation-data"]["get"]
 
     assert {parameter["name"] for parameter in operation["parameters"]} == {"url"}
+
+
+def test_satellite_detail_route_is_exposed():
+    operation = app.openapi()["paths"]["/api/satellites/{sat_id}"]["get"]
+
+    assert {parameter["name"] for parameter in operation["parameters"]} == {
+        "sat_id",
+        "force",
+    }

@@ -209,6 +209,35 @@ async def test_satellite_catalog_falls_back_to_local_status_filter(
 
 
 @pytest.mark.asyncio
+async def test_satellite_lookup_uses_sat_id_and_one_hour_cache(
+    database: Database, monkeypatch
+):
+    client = SatNOGSClient(PersistentCache(database), "")
+    requests: list[dict | None] = []
+
+    class Response:
+        @staticmethod
+        def json():
+            return [{"sat_id": "ABCD-1234", "name": "Example", "names": ["Alias A"]}]
+
+    async def fake_get(url, params=None):
+        requests.append(params)
+        return Response()
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    first, _ = await client.satellite("ABCD-1234")
+    second, _ = await client.satellite("ABCD-1234")
+    await client.close()
+
+    assert first == second == {
+        "sat_id": "ABCD-1234",
+        "name": "Example",
+        "names": ["Alias A"],
+    }
+    assert requests == [{"sat_id": "ABCD-1234"}]
+
+
+@pytest.mark.asyncio
 async def test_observation_pages_use_supported_time_filters(database: Database, monkeypatch):
     client = SatNOGSClient(PersistentCache(database), "")
     requests: list[dict] = []
