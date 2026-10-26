@@ -293,6 +293,48 @@ async def test_reception_pages_reuse_one_hour_cache(database: Database, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_reception_search_filters_are_sent_and_cached_separately(
+    database: Database, monkeypatch
+):
+    client = SatNOGSClient(PersistentCache(database), "")
+    requests: list[dict] = []
+
+    class Response:
+        headers: dict = {}
+
+        @staticmethod
+        def json():
+            return [{"id": 456}]
+
+    async def fake_get(url, params=None):
+        requests.append(params or {})
+        return Response()
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    filters = {
+        "observation_id": "456",
+        "sat_id": "ABCD-1234",
+        "transmitter_mode": "GFSK",
+        "status": "good",
+    }
+    first = await client.observation_page(4856, future=False, filters=filters)
+    second = await client.observation_page(4856, future=False, filters=filters)
+    unfiltered = await client.observation_page(4856, future=False)
+    await client.close()
+
+    assert first["results"] == second["results"] == [{"id": 456}]
+    assert requests[0]["ground_station"] == 4856
+    assert requests[0]["observation_id"] == "456"
+    assert requests[0]["sat_id"] == "ABCD-1234"
+    assert requests[0]["transmitter_mode"] == "GFSK"
+    assert requests[0]["status"] == "good"
+    assert "end" in requests[0]
+    assert len(requests) == 2
+    assert "observation_id" not in requests[1]
+    assert unfiltered["results"] == [{"id": 456}]
+
+
+@pytest.mark.asyncio
 async def test_forced_upcoming_refresh_forces_every_page(database: Database, monkeypatch):
     client = SatNOGSClient(PersistentCache(database), "")
     calls = []

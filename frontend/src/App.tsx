@@ -391,15 +391,6 @@ function degrees(value?: number): string {
   return value == null ? '—' : `${value.toFixed(1)}°`
 }
 
-function observationMatches(item: Observation, query: string, targets: Target[]): boolean {
-  const keyword = query.trim().toLocaleLowerCase()
-  if (!keyword) return true
-  const matchingTargets = targets.filter(target => (item.sat_id && target.sat_id === item.sat_id) || (item.norad_cat_id && target.norad_cat_id === item.norad_cat_id))
-  const frequencies = [item.observation_frequency, item.center_frequency, item.transmitter_downlink_low, item.transmitter_downlink_high].filter((value): value is number => value != null)
-  const values = [item.id, `#${item.id}`, observationSatellite(item), item.satellite_name, item.tle0, item.sat_id, item.norad_cat_id, item.transmitter_uuid, item.transmitter_description, item.transmitter_mode, item.transmitter_baud, item.observer, ...matchingTargets.flatMap(target => [target.name, target.satellite_name, target.sat_id, target.norad_cat_id]), ...frequencies.flatMap(value => [value, frequency(value), value / 1_000_000])]
-  return values.some(value => String(value ?? '').toLocaleLowerCase().includes(keyword))
-}
-
 function distanceFrom(now: Date, value?: string): string {
   if (!value) return '—'
   const seconds = Math.round((new Date(value).getTime() - now.getTime()) / 1000)
@@ -903,11 +894,24 @@ function JobProgress({ job, label, action }: { job: any; label: string; action?:
   return <section className="panel job-progress"><div className="job-progress-heading"><span className="spinner" /><div><small>{label} · {String(job.stage || 'working').replaceAll('_', ' ')}</small><strong>{job.message || 'Working in the background…'}</strong></div>{current != null && <span>{current}{total ? ` / ${total}` : ''}</span>}{action}</div><div className={`job-progress-bar ${percentage == null ? 'indeterminate' : ''}`}><span style={percentage == null ? undefined : { width: `${percentage}%` }} /></div>{progress.records != null && <small>{progress.records} records loaded</small>}<p>Safe to leave this page. The task continues on the server.</p></section>
 }
 
+type ReceptionSearchForm = {
+  observationId: string
+  satellite: string
+  satId: string
+  noradCatId: string
+  mode: string
+  transmitterUuid: string
+  observer: string
+  status: 'all' | 'good' | 'bad' | 'unknown' | 'failed'
+}
+
+const EMPTY_RECEPTION_SEARCH: ReceptionSearchForm = { observationId: '', satellite: '', satId: '', noradCatId: '', mode: '', transmitterUuid: '', observer: '', status: 'all' }
+
 function ObservationList({ future, title, targets, selectedId, onNavigate, onNotify }: { future: boolean; title: string; targets: Target[]; selectedId: number | null; onNavigate: (page: Page, observationId?: number | null, replace?: boolean) => void; onNotify: (message: string, tone?: 'success' | 'error' | 'info') => void }) {
   const now = useClock()
   const [items, setItems] = useState<Observation[]>([]), [cursor, setCursor] = useState<string | null>(null), [loading, setLoading] = useState(false)
-  const [receptionFilter, setReceptionFilter] = useState<'all' | 'good' | 'bad' | 'unknown'>('all')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [receptionSearch, setReceptionSearch] = useState<ReceptionSearchForm>(EMPTY_RECEPTION_SEARCH)
+  const [appliedReceptionSearch, setAppliedReceptionSearch] = useState<ReceptionSearchForm>(EMPTY_RECEPTION_SEARCH)
   const [progress, setProgress] = useState({ page: 0, records: 0 })
   const request = useRef<AbortController | null>(null)
   const serverRefreshPollTimer = useRef<number | null>(null)
@@ -954,30 +958,40 @@ function ObservationList({ future, title, targets, selectedId, onNavigate, onNot
       if (request.current === controller) { request.current = null; setLoading(false) }
     }
   }
-  const loadReceptionPage = async (reset = false, force = false) => {
+  const loadReceptionPage = async (reset = false, force = false, query: ReceptionSearchForm = appliedReceptionSearch) => {
     setLoading(true)
     try {
       const activeCursor = reset ? null : cursor, params = new URLSearchParams()
       if (activeCursor) params.set('cursor', activeCursor)
       if (force) params.set('force', 'true')
+      if (query.observationId.trim()) params.set('observation_id', query.observationId.trim().replace(/^#/, ''))
+      if (query.satellite.trim()) params.set('satellite', query.satellite.trim())
+      if (query.satId.trim()) params.set('sat_id', query.satId.trim())
+      if (query.noradCatId.trim()) params.set('norad_cat_id', query.noradCatId.trim())
+      if (query.mode.trim()) params.set('transmitter_mode', query.mode.trim())
+      if (query.transmitterUuid.trim()) params.set('transmitter_uuid', query.transmitterUuid.trim())
+      if (query.observer.trim()) params.set('observer', query.observer.trim())
+      if (query.status !== 'all') params.set('status', query.status)
       const data = await api<any>(`/observations/receptions${params.size ? `?${params}` : ''}`)
       const nextCursor = data.next_cursor || null
       setItems(previous => reset ? data.results : [...previous, ...data.results.filter((value: Observation) => !previous.some(item => item.id === value.id))])
       setCursor(nextCursor)
       if (data.cache?.refreshing) pollAfterServerRefresh()
-      if (reset) onNotify(`Reception archive updated: ${data.results.length} records loaded.`, 'success')
+      if (reset) onNotify(`Online Reception search completed: ${data.results.length} records loaded.`, 'success')
     } catch (error) { onNotify(`Reception archive update failed: ${String(error)}`, 'error') }
     finally { setLoading(false) }
+  }
+  const applyReceptionSearch = async (query: ReceptionSearchForm) => {
+    setAppliedReceptionSearch(query); setItems([]); setCursor(null)
+    await loadReceptionPage(true, false, query)
   }
   useEffect(() => {
     setItems([]); setCursor(null); setProgress({ page: 0, records: 0 })
     if (future) void loadUpcoming(false); else void loadReceptionPage(true, false)
     return () => { request.current?.abort(); if (serverRefreshPollTimer.current) window.clearTimeout(serverRefreshPollTimer.current) }
   }, [future])
-  const receptionStatus = (item: Observation): 'good' | 'bad' | 'unknown' => item.vetted_status === 'good' ? 'good' : item.vetted_status === 'bad' ? 'bad' : 'unknown'
-  const statusCounts = items.reduce((counts, item) => { counts[receptionStatus(item)] += 1; return counts }, { good: 0, bad: 0, unknown: 0 })
-  const statusFilteredItems = future ? activeUpcoming(items, now.getTime()) : receptionFilter === 'all' ? items : items.filter(item => receptionStatus(item) === receptionFilter)
-  const visibleItems = future ? statusFilteredItems : statusFilteredItems.filter(item => observationMatches(item, searchQuery, targets))
+  const receptionStatus = (item: Observation): 'good' | 'bad' | 'unknown' | 'failed' => { const value = String(item.vetted_status || item.status || '').toLocaleLowerCase(); return value === 'good' ? 'good' : value === 'bad' ? 'bad' : value === 'failed' ? 'failed' : 'unknown' }
+  const visibleItems = future ? activeUpcoming(items, now.getTime()) : items
   if (selectedId != null) {
     const selectedIndex = visibleItems.findIndex(item => item.id === selectedId)
     const previousId = selectedIndex > 0 ? visibleItems[selectedIndex - 1].id : null
@@ -988,9 +1002,9 @@ function ObservationList({ future, title, targets, selectedId, onNavigate, onNot
   return <div className="page"><PageHeader eyebrow={future ? 'STATION QUEUE' : 'RECEIVED SIGNALS'} title={title} action={<button className="ghost" onClick={() => future ? loadUpcoming(true) : loadReceptionPage(true, true)}>{loading ? (future ? 'Restart refresh' : 'Refreshing…') : 'Refresh'}</button>} />
     {future && <section className="panel upcoming-timeline"><div className="panel-title"><div><small>48 HOUR WINDOW</small><h2>Observation timeline</h2></div><span className="timeline-count">{visibleItems.length} observations</span></div><Timeline observations={visibleItems} now={now} /></section>}
     {future && loading && <div className="fetch-progress"><span className="spinner" /><div><strong>{progress.page ? `Fetching page ${progress.page + 1}…` : 'Starting background update…'}</strong><small>{progress.page} page{progress.page === 1 ? '' : 's'} · {progress.records} observations loaded</small></div></div>}
-    {!future && <><section className="reception-search"><label>Search loaded receptions<input type="search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Observation ID, satellite, alias, SatNOGS/NORAD ID, mode, frequency or observer" /></label>{searchQuery && <button className="ghost" onClick={() => setSearchQuery('')}>Clear</button>}<span>{visibleItems.length} matches</span></section><section className="reception-filters" aria-label="Reception status filter"><span>STATUS</span>{(['all', 'good', 'bad', 'unknown'] as const).map(status => <button key={status} className={receptionFilter === status ? 'active' : ''} onClick={() => setReceptionFilter(status)}>{status}<strong>{status === 'all' ? items.length : statusCounts[status]}</strong></button>)}<small>Filters apply locally to the {items.length} loaded records.</small></section></>}
-    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => onNavigate(future ? 'observations' : 'receptions', item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small>{!future && <ReceptionAssetTags observation={item} />}</div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">{!future && searchQuery ? 'No loaded receptions match this search.' : !future && receptionFilter !== 'all' ? `No ${receptionFilter} receptions in the loaded records.` : 'No records returned.'}</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first page…</div>}</div>
-    {!future && cursor && <button className="load-more" onClick={() => loadReceptionPage()} disabled={loading}>{loading ? 'Loading…' : 'Load next page'}</button>}
+    {!future && <section className="panel reception-search-panel"><div className="panel-title"><div><small>ONLINE QUERY</small><h2>Search SatNOGS receptions</h2></div><span className="timeline-count">{visibleItems.length} loaded result{visibleItems.length === 1 ? '' : 's'}</span></div><form onSubmit={event => { event.preventDefault(); void applyReceptionSearch(receptionSearch) }}><div className="reception-search-grid"><label>Observation ID(s)<input value={receptionSearch.observationId} onChange={event => setReceptionSearch({ ...receptionSearch, observationId: event.target.value })} placeholder="15286989 or comma-separated IDs" /></label><label>Satellite name / alias<input value={receptionSearch.satellite} onChange={event => setReceptionSearch({ ...receptionSearch, satellite: event.target.value })} placeholder="ISS, ZARYA, AO-91…" /></label><label>SatNOGS satellite ID<input value={receptionSearch.satId} onChange={event => setReceptionSearch({ ...receptionSearch, satId: event.target.value })} placeholder="XSKZ-5603-1870-9019-3066" /></label><label>NORAD catalog ID<input type="number" min="1" value={receptionSearch.noradCatId} onChange={event => setReceptionSearch({ ...receptionSearch, noradCatId: event.target.value })} placeholder="25544" /></label><label>Transmitter mode<input value={receptionSearch.mode} onChange={event => setReceptionSearch({ ...receptionSearch, mode: event.target.value })} placeholder="CW, GFSK, SSTV…" /></label><label>Transmitter UUID<input value={receptionSearch.transmitterUuid} onChange={event => setReceptionSearch({ ...receptionSearch, transmitterUuid: event.target.value })} placeholder="bSPmbvvAavnj9XHMim8yEc" /></label><label>Observer username or ID<input value={receptionSearch.observer} onChange={event => setReceptionSearch({ ...receptionSearch, observer: event.target.value })} placeholder="bi119ate5hxk" /></label></div><div className="reception-search-actions"><p>Name and alias are resolved through SatNOGS DB; the resulting filters are sent to the Network API.</p><div className="button-row"><button type="button" className="ghost" disabled={loading} onClick={() => { setReceptionSearch(EMPTY_RECEPTION_SEARCH); void applyReceptionSearch(EMPTY_RECEPTION_SEARCH) }}>Clear</button><button type="submit" className="primary" disabled={loading}>{loading ? 'Searching…' : 'Search online'}</button></div></div></form><div className="reception-filters" aria-label="Online Reception status search"><span>STATUS / API</span>{(['all', 'good', 'bad', 'unknown', 'failed'] as const).map(status => <button type="button" key={status} className={receptionSearch.status === status ? 'active' : ''} disabled={loading} onClick={() => { const query = { ...receptionSearch, status }; setReceptionSearch(query); void applyReceptionSearch(query) }}>{status}</button>)}<small>Changing status immediately starts a new Network API search.</small></div></section>}
+    <div className="panel observation-list">{visibleItems.map(item => { const status = future ? 'scheduled' : receptionStatus(item); return <button className="observation-row" key={item.id} onClick={() => onNavigate(future ? 'observations' : 'receptions', item.id)}><div className="obs-id">#{item.id}</div><div><strong>{observationSatellite(item)}</strong><small>{item.transmitter_description || item.transmitter_mode || item.transmitter_uuid || 'Unknown transmitter'} · Observer: {item.observer || '—'}</small>{!future && <ReceptionAssetTags observation={item} />}</div><div><strong>{formatUtc(item.start)}</strong><small>to {formatUtc(item.end)}</small></div><div><strong>{degrees(item.max_altitude)}</strong><span className={`list-status ${status}`}>{status}</span></div><MiniPolarPlot observation={item} /><span className="detail-chevron">View detail →</span></button>})}{!visibleItems.length && !loading && <div className="empty">No Reception records were returned by this online query.</div>}{!items.length && loading && <div className="catalog-loading"><span className="spinner" /> Waiting for the first API page…</div>}</div>
+    {!future && cursor && <button className="load-more" onClick={() => loadReceptionPage(false, false, appliedReceptionSearch)} disabled={loading}>{loading ? 'Loading…' : 'Load next API page'}</button>}
   </div>
 }
 

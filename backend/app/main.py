@@ -556,17 +556,56 @@ async def observations_overview(force: bool = False):
 
 @app.get("/api/observations/receptions")
 async def observations_receptions(
-    cursor: str | None = Query(default=None), force: bool = False
+    cursor: str | None = Query(default=None),
+    force: bool = False,
+    observation_id: str | None = Query(default=None),
+    satellite: str | None = Query(default=None),
+    sat_id: str | None = Query(default=None),
+    norad_cat_id: int | None = Query(default=None),
+    transmitter_mode: str | None = Query(default=None),
+    transmitter_uuid: str | None = Query(default=None),
+    observer: str | None = Query(default=None),
+    status: str | None = Query(default=None),
 ):
     station = await resolve_station(database, client)
-    if not force:
+    if status and status not in {"good", "bad", "unknown", "failed"}:
+        raise HTTPException(400, "Reception status must be good, bad, unknown or failed")
+    filters: dict[str, Any] = {}
+    try:
+        if satellite:
+            resolved_satellite = await client.resolve_satellite(satellite)
+            sat_id = sat_id or resolved_satellite.get("sat_id")
+            norad_cat_id = norad_cat_id or resolved_satellite.get("norad_cat_id")
+        if observation_id:
+            filters["observation_id"] = observation_id
+        if sat_id:
+            filters["sat_id"] = sat_id.strip()
+        elif norad_cat_id:
+            filters["norad_cat_id"] = norad_cat_id
+        if transmitter_mode:
+            filters["transmitter_mode"] = transmitter_mode.strip()
+        if transmitter_uuid:
+            filters["transmitter_uuid"] = transmitter_uuid.strip()
+        if observer:
+            filters["observer"] = await client.resolve_observer(observer)
+        if status:
+            filters["status"] = status
+    except SatNOGSError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if not filters and not force:
         cached = _cached_observation_page_response(
             station.station_id, future=False, cursor=cursor
         )
         if cached:
             return cached
     return await client.observation_page(
-        station.station_id, future=False, cursor=cursor, use_cache=True, force=force
+        station.station_id,
+        future=False,
+        cursor=cursor,
+        use_cache=True,
+        force=force,
+        filters=filters or None,
     )
 
 

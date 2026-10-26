@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -15,6 +17,7 @@ from app.cache import PersistentCache
 
 DB_BASE_URL = "https://db.satnogs.org/api"
 NETWORK_BASE_URL = "https://network.satnogs.org/api"
+NETWORK_ROOT_URL = "https://network.satnogs.org"
 ONE_HOUR = timedelta(hours=1)
 ONE_DAY = timedelta(days=1)
 MAX_OBSERVATION_ASSET_BYTES = 8 * 1024 * 1024
@@ -149,6 +152,98 @@ class SatNOGSClient:
         return await self.cache.get_or_fetch(
             "satellites:in-orbit", "satellites", ONE_HOUR, fetch, force=force
         )
+
+    async def all_satellites(
+        self, force: bool = False
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        async def fetch() -> Any:
+            response = await self._get(f"{DB_BASE_URL}/satellites/")
+            payload = response.json()
+            if isinstance(payload, dict):
+                payload = payload.get("results", [])
+            if not isinstance(payload, list):
+                raise SatNOGSError("SatNOGS returned an invalid satellite catalog")
+            return payload
+
+        return await self.cache.get_or_fetch(
+            "satellites:all", "satellites", ONE_HOUR, fetch, force=force
+        )
+
+    @staticmethod
+    def _satellite_search_values(satellite: dict[str, Any]) -> list[str]:
+        values: list[Any] = [
+            satellite.get("name"),
+            satellite.get("sat_id"),
+            satellite.get("norad_cat_id"),
+        ]
+        for key in ("names", "aliases", "alternative_names"):
+            aliases = satellite.get(key)
+            if isinstance(aliases, list):
+                values.extend(aliases)
+            elif aliases:
+                values.extend(re.split(r"[,;|\n]+", str(aliases)))
+        return [str(value).strip() for value in values if str(value or "").strip()]
+
+    async def resolve_satellite(self, query: str) -> dict[str, Any]:
+        normalized = query.strip().casefold()
+        satellites, _ = await self.all_satellites()
+        exact = [
+            item
+            for item in satellites
+            if normalized
+            in {value.casefold() for value in self._satellite_search_values(item)}
+        ]
+        matches = exact or [
+            item
+            for item in satellites
+            if any(
+                normalized in value.casefold()
+                for value in self._satellite_search_values(item)
+            )
+        ]
+        if not matches:
+            raise SatNOGSError(f'No satellite matches "{query}"')
+        if len(matches) > 1:
+            suggestions = ", ".join(
+                str(item.get("name") or item.get("sat_id")) for item in matches[:5]
+            )
+            raise SatNOGSError(
+                f'Satellite search "{query}" is ambiguous. Use a SatNOGS or NORAD ID. '
+                f"Matches include: {suggestions}"
+            )
+        return matches[0]
+
+    async def resolve_observer(self, query: str) -> str:
+        normalized = query.strip()
+        if normalized.isdigit():
+            return normalized
+
+        async def fetch() -> Any:
+            response = await self._get(f"{NETWORK_ROOT_URL}/observations/")
+            options = re.findall(
+                r'<option\s+data-author="(\d+)"\s+value="\d+"[^>]*>\s*([^<]+?)\s*</option>',
+                response.text,
+                flags=re.IGNORECASE,
+            )
+            return [
+                {"id": observer_id, "name": html.unescape(name).strip()}
+                for observer_id, name in options
+            ]
+
+        observers, _ = await self.cache.get_or_fetch(
+            "network:observers", "observers", ONE_HOUR, fetch
+        )
+        match = next(
+            (
+                item
+                for item in observers
+                if str(item.get("name") or "").casefold() == normalized.casefold()
+            ),
+            None,
+        )
+        if not match:
+            raise SatNOGSError(f'No SatNOGS observer matches "{query}"')
+        return str(match["id"])
 
     async def satellite(
         self, sat_id: str, force: bool = False
@@ -326,6 +421,7 @@ class SatNOGSClient:
         cursor: str | None = None,
         use_cache: bool = True,
         force: bool = False,
+        filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"ground_station": station_id}
         if future:
@@ -334,7 +430,12 @@ class SatNOGSClient:
             params["end"] = datetime.now(timezone.utc).isoformat()
         if cursor:
             params["cursor"] = cursor
-        key = f"observations:{station_id}:{int(future)}:{cursor or 'first'}"
+        if filters:
+            params.update({key: value for key, value in filters.items() if value not in (None, "")})
+        filter_suffix = ""
+        if filters:
+            filter_suffix = ":query:" + json.dumps(filters, sort_keys=True, separators=(",", ":"))
+        key = f"observations:{station_id}:{int(future)}:{cursor or 'first'}{filter_suffix}"
 
         async def fetch() -> Any:
             response = await self._get(f"{NETWORK_BASE_URL}/observations/", params)

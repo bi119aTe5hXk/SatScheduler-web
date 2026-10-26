@@ -34,3 +34,18 @@ def test_satellite_detail_route_is_exposed():
         "sat_id",
         "force",
     }
+
+
+def test_reception_search_route_exposes_online_filters():
+    operation = app.openapi()["paths"]["/api/observations/receptions"]["get"]
+
+    assert {
+        "observation_id",
+        "satellite",
+        "sat_id",
+        "norad_cat_id",
+        "transmitter_mode",
+        "transmitter_uuid",
+        "observer",
+        "status",
+    }.issubset({parameter["name"] for parameter in operation["parameters"]})
